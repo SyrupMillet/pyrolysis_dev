@@ -1,2 +1,2 @@
 # FB_pyrolysis_dev
- A developing solver for pyrolysis in fluidized bed. Based on NGA2.
+ A naive developing solver for pyrolysis in fluidized bed. Based on NGA2.

@@ -8,7 +8,7 @@ USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 USE_IRL   = FALSE
 PROFILE   = FALSE
-DEBUG     = TRUE
+DEBUG     = FALSE
 COMP      = gnu
 EXEBASE   = nga
 
@@ -47,7 +47,8 @@ include $(NGA_HOME)/tools/GNUMake/Make.rules
 
 # Run case in serial
 run: cleanrun
-	mpiexec -n 1 ./nga.dp.gnu.dbg.mpi.exe -i input -v 2
+	mpiexec -n 1 ./nga.dp.gnu.opt.mpi.exe -i input -v 2
 
 cleanrun:
 	rm -r -f ensight monitor
+

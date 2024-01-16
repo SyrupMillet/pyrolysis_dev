@@ -33,8 +33,10 @@ module my_lpt_class
      real(WP), dimension(3) :: Acol       !< Collision acceleration
      real(WP), dimension(3) :: Tcol       !< Collision torque
      real(WP) :: T                        !< Temperature
-     real(WP) :: dt                       !< Time step size for the particle
      real(WP) :: dTdt                     !< Tempreture change rate for reaction
+     real(WP) :: dt
+     real(WP) :: heatS                    !< Heat change source term for this particle
+     real(WP) :: heatCap
      !> MPI_INTEGER data
      integer , dimension(3) :: ind        !< Index of cell containing particle center
      integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
@@ -143,6 +145,9 @@ module my_lpt_class
      procedure :: update_VF                              !< Compute particle volume fraction
      procedure :: filter                                 !< Apply volume filtering to field
      procedure :: inject                                 !< Inject particles at a prescribed boundary
+
+     procedure :: convectiveHeatTrans
+     procedure :: updateTemp
   end type lpt
 
 
@@ -388,7 +393,7 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nxib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nyib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nzib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   integer, dimension(:,:,:), allocatable :: npic  !< Number of particle in cell
+   integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
    integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
 
    ! Check if all IB parameters are present
@@ -406,6 +411,22 @@ contains
         this%p(i)%Tcol=0.0_WP
      end do
    end block zero_force
+
+   aaa: block
+   integer :: i,ip,jp,kp
+   write(*,*),"Before Number of p",this%np_
+   do i=1,this%np_
+      ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+      write(*,*) ,ip,jp,kp
+   end do
+
+   write(*,*),"Before Number of ghost p",this%ng_
+   
+   do i=1,this%ng_
+      ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+      write(*,*) ,ip,jp,kp
+   end do
+   end block aaa
    
    ! Then share particles across overlap
    call this%share()
@@ -416,36 +437,29 @@ contains
      integer :: i,ip,jp,kp,ierr
      integer :: mymax_npic,max_npic
 
-     ! Allocate number of particle in cell, Initiate npic
+     ! Allocate number of particle in cell
      allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
-
      ! Count particles and ghosts per cell
-      if (this%debugFlag) then
-         write(*,*) "[Debug] [Collide] Local (In this process) number of present particles is:", this%np_
-      end if
+     write(*,*),"Before Number of p",this%np_
      do i=1,this%np_
-        ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3) ! Get the position (index) of the cell containing this particle
-        npic(ip,jp,kp)=npic(ip,jp,kp)+1                     ! restore the info into npic
+        ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+        write(*,*) this%p(i)%id,ip,jp,kp
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
      end do
-     ! Do the same for ghost particles
-      if (this%debugFlag) then
-         write(*,*) "[Debug] [Collide] Local (In this process) number of ghost particles is:", this%ng_
-      end if
-      do i=1,this%ng_
-         ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
-         if (this%debugFlag) then
-            write(*,*), "The id of gp", this%g(i)%id
-            write(*,*), "The location cell index [X,Y,Z] of gp", ip, jp, kp
-         end if
-         npic(ip,jp,kp)=npic(ip,jp,kp)+1
-      end do
+
+     write(*,*),"Number od ghost p",this%ng_
+
+     do i=1,this%ng_
+        ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+        write(*,*) this%p(i)%id,ip,jp,kp
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
+     end do
 
      ! Get maximum number of particle in cell
      mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
 
      ! Allocate pic map
      allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
-
      ! Assemble pic map
      npic=0
      do i=1,this%np_
@@ -489,39 +503,26 @@ contains
         if (this%p(i1)%id.le.0) cycle collision
         
         ! Store particle data
-        r1 = this%p(i1)%pos
-        v1 = this%p(i1)%vel
-        w1 = this%p(i1)%angVel
-        d1 = this%p(i1)%d              ! << Diameter
-        m1 = this%rho*Pi/6.0_WP*d1**3  ! << old mass of particle
+        r1=this%p(i1)%pos
+        v1=this%p(i1)%vel
+        w1=this%p(i1)%angVel
+        d1=this%p(i1)%d
+        m1=this%rho*Pi/6.0_WP*d1**3
 
         ! First collide with walls
-        ! Get the distance from particle position to walls
         d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),S=this%Wdist,bc='d')
-        
-        n12=this%Wnorm(:,this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3)) ! Wall norm of this cell
-        
-        n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)]) ! normalize the norm 
-        
+        n12=this%Wnorm(:,this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))
+        n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
         rnv=dot_product(v1,n12)
-
-        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1) 
-
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
 
-
-        ! Assess if there is collision with the wall
+        ! Assess if there is collision
         if (delta_n.gt.0.0_WP) then
            ! Normal collision
-
-         if (this%debugFlag) then 
-            write(*,*) "[Debug][Collision][Wall] There is a collision with the wall" 
-         end if
-
-           k_n = m1*k_coeff_w
-           eta_n = m1*eta_coeff_w
-           f_n = -k_n*delta_n*n12-eta_n*rnv*n12
-
+           k_n=m1*k_coeff_w
+           eta_n=m1*eta_coeff_w
+           f_n=-k_n*delta_n*n12-eta_n*rnv*n12
            ! Tangential collision
            f_t=0.0_WP
            if (this%mu_f.gt.0.0_WP) then
@@ -539,6 +540,11 @@ contains
            this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
            ! Calculate collision torque
            this%p(i1)%Tcol=this%p(i1)%Tcol+cross_product(0.5_WP*d1*n12,f_t)
+         if (this%debugFlag) then 
+            write(*,*) "[Debug][Collision][Wall] There is a collision with the wall. Force applied(normal, tangent): ", f_n, f_t
+            write(*,*) "[Debug][Collision][Wall] k_n; eta_n", k_n, eta_n
+            write(*,*) "[Debug][Collision][Wall] delta_n", delta_n
+         end if
         end if
 
         ! Collide with IB
@@ -672,7 +678,11 @@ contains
      call MPI_ALLREDUCE(this%ncol,nn,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%ncol=nn/2
 
    end block collision_force
-
+   
+   ! Clean up
+   if (allocated(npic)) deallocate(npic)
+   if (allocated(ipic)) deallocate(ipic)
+   
  end subroutine collide
   
 
@@ -1517,9 +1527,6 @@ contains
        end if
     else
        no=1
-      if (this%debugFlag) then 
-         write(*,*) "[Debug] [share] Set overlap size to be 1" 
-      end if
     end if
 
     ! Clean up ghost array
@@ -1940,5 +1947,67 @@ contains
 
   end subroutine read
 
+
+   subroutine convectiveHeatTrans(this,U,V,W,visc,rho,gCp,gk,Temp)
+      use mathtools, only: Pi
+      implicit none
+   
+      class(lpt), intent(inout) :: this
+      ! Re calculation needs relative velocity, gas viscosity, gas density, particle diameter
+      ! Pr calculation needs gas heat capacity, gas viscosity, gas heat conductivity
+      ! particle volume fraction also needed
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U 
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V    
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc 
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho 
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Temp
+      real(WP) :: absU, Udif, Vdif, Wdif, gRho, gVisc, gCp, gk, charL
+      real(WP) :: Re, Pr, gEps, A, Nu, alpha, source
+      integer :: i
+
+      convectionHeatTrans: do i=1,this%np_
+         if (this%p(i)%id.le.0) cycle convectionHeatTrans
+         gRho = rho(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+         gVisc = visc(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+         charL = this%p(i)%d
+         ! calculate local Reynods number
+         Udif = abs(this%p(i)%vel(1)-U(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))  !< get velocity difference between gas and particle
+         Vdif = abs(this%p(i)%vel(2)-V(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))
+         Wdif = abs(this%p(i)%vel(3)-W(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))
+         absU = (Udif**2+Vdif**2+Wdif**2)**0.5 !< get velocity norm
+         Re = gRho*absU*charL/gVisc
+         ! calculate local Pr number
+         Pr = gCp*gVisc/gk
+         ! calculate Nu number and get convection heat transfer source
+         A = Pi*charL**3/6
+         gEps = 1.0_WP-this%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+         Nu = (7-10*gEps+5*gEps**2)*(1+0.7*Re**0.2*Pr**0.3333)+(1.33-2.4*gEps+1.2*gEps**2)*Re**0.7*Pr**0.333333
+         write(*,*) "NU number for partical is", Nu
+         alpha = Nu*gk/charL
+         source = alpha*A*(Temp(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))-this%p(i)%T)
+         this%p(i)%heatS = source+this%p(i)%heatS
+
+      end do convectionHeatTrans
+   end subroutine convectiveHeatTrans
+
+
+
+   subroutine updateTemp(this,dt)
+      use mathtools, only: Pi
+      implicit none
+      class(lpt), intent(inout) :: this
+      real(WP) :: dt, dTdt, mass
+
+      integer :: i
+      convectionHeatTrans: do i=1,this%np_
+         if (this%p(i)%id.le.0) cycle convectionHeatTrans
+         mass = Pi/6*this%p(i)%d**3*this%rho     !< later the particle density should be added into particle's property instead of a global one
+         dTdt = this%p(i)%heatS/(mass*this%p(i)%heatCap)
+         this%p(i)%T = this%p(i)%T + dTdt*dt
+
+         this%p(i)%heatS = 0.0_WP  !< reset the heat source term
+      end do convectionHeatTrans
+   end subroutine updateTemp
 
 end module my_lpt_class

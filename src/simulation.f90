@@ -2,7 +2,7 @@
 module simulation
   use precision,         only: WP
   use geometry,          only: cfg
-  use my_lpt_class,         only: lpt
+  use my_lpt_class,      only: lpt
   use hypre_uns_class,   only: hypre_uns
   use hypre_str_class,   only: hypre_str
   use lowmach_class,     only: lowmach
@@ -37,6 +37,10 @@ module simulation
   real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
   real(WP) :: visc,rho,inlet_velocity
   
+  !> Thermal properties
+  real(WP) :: initTemp, gHeatCap, gHeatCond
+  real(WP), dimension(:,:,:), allocatable :: Temp
+
   !> Wallclock time for monitoring
   type :: timer
     real(WP) :: time_in
@@ -142,14 +146,23 @@ contains
       allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
     end block allocate_work_arrays
 
+        ! initialize gas temperature
+    initalize_gas_temperature: block
+      call param_read('Fluid initial temperature',initTemp,default=573.15_WP)     !< K
+      call param_read('Fluid heat capacity',gHeatCap,default=1040.0_WP)           !< J/(kg*K)
+      call param_read('Fluid heat conductivity',gHeatCond,default=0.0383_WP)      !< W/(m*K)
+      allocate(Temp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+      Temp = initTemp
+    end block initalize_gas_temperature
+
 
     ! Initialize our LPT solver
     initialize_lpt: block
       use random, only: random_uniform
       use mathtools, only: Pi
-      real(WP) :: particleDiameter,VolFrac_particle,particleInitTemp,Lpart,Lparty,Lpartz,Vol_particle
-      integer :: nps
-      integer :: i,ix,iy,iz,np,npx,npy,npz
+      real(WP) :: dp,Hbed,VFavg,Tp,Lpart,Volp
+      real(WP) :: particleHeatCap,particleInitTemp
+      integer :: i,ix,iy,iz,np
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
       ! Get drag model from the inpit
@@ -157,35 +170,33 @@ contains
       ! Get particle density from the input
       call param_read('Particle density',lp%rho)
       ! Get particle diameter from the input
-      call param_read('Particle diameter',particleDiameter)
+      call param_read('Particle diameter',dp)
       ! Set filter scale to 3.5*dx
       lp%filter_width=3.5_WP*cfg%min_meshsize
 
       ! Root process initializes particles uniformly
-      ! call param_read('Bed height',bedHeight)
-      call param_read('Particle numbers', nps)
-      call param_read('Particle volume fraction',VolFrac_particle)
-      call param_read('Particle temperature',particleInitTemp,default=298.15_WP)
+      ! call param_read('Bed height',Hbed)
+      call param_read('Particle numbers', np)
+      call param_read('Particle volume fraction',VFavg)
+      call param_read('Particle temperature',Tp,default=298.15_WP)
+      call param_read("Particle heat conductivity", particleHeatCap, default=0.5_WP)
       if (lp%cfg%amRoot) then
-         ! Particle volume of single particle
-         Vol_particle = Pi/6.0_WP*particleDiameter**3
+         ! Particle volume
+         Volp = Pi/6.0_WP*dp**3
          ! Distance between particles
-         Lpart = (Vol_particle/VolFrac_particle)**(1.0_WP/3.0_WP)
-        write(*,*) "[Debug]",Vol_particle, Lpart
-        call lp%resize(nps)
-         do i=1,nps
+        Lpart = dp*1.5_WP
+         call lp%resize(np)
+         ! Distribute particles
+         do i=1,np
             ! Give position
             ix = (i-1)
-            lp%p(i)%pos(1) = lp%cfg%x(lp%cfg%imin)+(real(ix,WP)+1.0_WP)*Lpart
-            lp%p(i)%pos(2) = 0
-            lp%p(i)%pos(3) = 0
-
+            lp%p(i)%pos(1) = lp%cfg%x(lp%cfg%imin)+(real(ix,WP)+0.6_WP)*Lpart
+            lp%p(i)%pos(2) = 0.0_WP
+            lp%p(i)%pos(3) = 0.0_WP
             ! Give id
             lp%p(i)%id=int(i,8)
             ! Set the diameter
-            lp%p(i)%d=particleDiameter
-            ! Set the temperature
-            lp%p(i)%T=particleInitTemp
+            lp%p(i)%d=dp
             ! Give zero velocity
             lp%p(i)%vel=0.0_WP
             ! Give zero collision force
@@ -193,13 +204,20 @@ contains
             lp%p(i)%Tcol=0.0_WP
             ! Give zero dt
             lp%p(i)%dt=0.0_WP
+            ! Set the temperature
+            lp%p(i)%T=particleInitTemp
+            ! Set particle heat capacity
+            lp%p(i)%heatCap=particleHeatCap
+            ! Initialize other parameters
+            lp%p(i)%dTdt = 0.0_WP
+            lp%p(i)%heatS = 0.0_WP
             ! Locate the particle on the mesh
             lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+            write(*,*), lp%p(i)%ind
             ! Activate the particle
             lp%p(i)%flag=0
          end do
       end if
-
       call lp%sync()
 
       ! Get initial particle volume fraction
@@ -215,7 +233,7 @@ contains
       if (lp%cfg%amRoot) then
          print*,"===== Particle Setup Description ====="
          print*,'Number of particles', np
-         print*,'Mean volume fraction',VolFrac_particle
+         print*,'Mean volume fraction',VFavg
       end if
     end block initialize_lpt
 
@@ -223,14 +241,16 @@ contains
     ! Create partmesh object for Lagrangian particle output
     create_pmesh: block
       integer :: i
-      pmesh=partmesh(nvar=1,nvec=3,name='lpt')
+      pmesh=partmesh(nvar=2,nvec=3,name='lpt')
       pmesh%varname(1)='diameter'
+      pmesh%varname(2)='Temperature'
       pmesh%vecname(1)='velocity'
       pmesh%vecname(2)='ang_vel'
       pmesh%vecname(3)='Fcol'
       call lp%update_partmesh(pmesh)
       do i=1,lp%np_
          pmesh%var(1,i)=lp%p(i)%d
+         pmesh%var(2,i)=lp%p(i)%T
          pmesh%vec(:,1,i)=lp%p(i)%vel
          pmesh%vec(:,2,i)=lp%p(i)%angVel
          pmesh%vec(:,3,i)=lp%p(i)%Acol
@@ -270,7 +290,7 @@ contains
     ! Add Ensight output
     create_ensight: block
       ! Create Ensight output from cfg
-      ens_out=ensight(cfg=cfg,name='fluidized_bed')
+      ens_out=ensight(cfg=cfg,name='fb_pyrolysis_dev')
       ! Create event for Ensight output
       ens_evt=event(time=time,name='Ensight output')
       call param_read('Ensight output period',ens_evt%tper)
@@ -279,6 +299,7 @@ contains
       call ens_out%add_vector('velocity',Ui,Vi,Wi)
       call ens_out%add_scalar('epsp',lp%VF)
       call ens_out%add_scalar('pressure',fs%P)
+      call ens_out%add_scalar('temperature',Temp)
       ! Output to ensight
       if (ens_evt%occurs()) call ens_out%write_data(time%t)
     end block create_ensight
@@ -359,10 +380,6 @@ contains
     use parallel, only: parallel_time
     implicit none
     real(WP) :: cfl
-    ! write(*,*) "  "
-    ! write(*,*) "================================================================"
-    ! write(*,*) "Tap ENTER to let Simulation run"
-    ! read(*,*)
 
     ! Perform time integration
     do while (.not.time%done())
@@ -376,8 +393,7 @@ contains
        call time%adjust_dt()
        call time%increment()
 
-       ! Remember old density, velocity, and momentum\
-      
+       ! Remember old density, velocity, and momentum
        fs%rhoold=fs%rho
        fs%Uold=fs%U; fs%rhoUold=fs%rhoU
        fs%Vold=fs%V; fs%rhoVold=fs%rhoV
@@ -389,24 +405,18 @@ contains
 
        ! Collide and advance particles
        call lp%collide(dt=time%dtmid)
+       write(*,*) ,'debug!!!!!!!!!!!!!!!!!!!!!!!'
        call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
         
-      check_G: block
-        use messager, only: die
-        if (lp%np_ .eq. 0) then
-          write(*,*) "\n\n\n"
-          call die("There is no particles alive, no need to run any more")
-        end if
-      end block check_G
+      write(*,*) ,'debug!!!!!!!!!!!!!!!!!!!!!!!'
+      call lp%convectiveHeatTrans(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=rho0,gCp=gHeatCap,gk=gHeatCond,Temp=Temp)
+      call lp%updateTemp(dt=time%dt)
 
        ! Update density based on particle volume fraction
        fs%rho=rho*(1.0_WP-lp%VF)
        dRHOdt=(fs%RHO-fs%RHOold)/time%dtmid
        wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
-
-      ! Temperature-Enthalpy Balance Can be added here
-
 
        ! Perform sub-iterations
        do while (time%it.le.time%itmax)
@@ -507,6 +517,7 @@ contains
             call lp%update_partmesh(pmesh)
             do i=1,lp%np_
                pmesh%var(1,i)=lp%p(i)%d
+               pmesh%var(2,i)=lp%p(i)%T
                pmesh%vec(:,1,i)=lp%p(i)%vel
                pmesh%vec(:,2,i)=lp%p(i)%angVel
                pmesh%vec(:,3,i)=lp%p(i)%Acol

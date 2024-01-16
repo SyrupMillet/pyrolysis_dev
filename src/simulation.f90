@@ -161,7 +161,7 @@ contains
       use random, only: random_uniform
       use mathtools, only: Pi
       real(WP) :: dp,Hbed,VFavg,Tp,Lpart,Volp
-      real(WP) :: particleHeatCap,particleInitTemp
+      real(WP) :: particleHeatCap
       integer :: i,ix,iy,iz,np
       ! Create solver
       lp=lpt(cfg=cfg,name='LPT')
@@ -205,7 +205,7 @@ contains
             ! Give zero dt
             lp%p(i)%dt=0.0_WP
             ! Set the temperature
-            lp%p(i)%T=particleInitTemp
+            lp%p(i)%T=Tp
             ! Set particle heat capacity
             lp%p(i)%heatCap=particleHeatCap
             ! Initialize other parameters
@@ -405,11 +405,9 @@ contains
 
        ! Collide and advance particles
        call lp%collide(dt=time%dtmid)
-       write(*,*) ,'debug!!!!!!!!!!!!!!!!!!!!!!!'
        call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
         
-      write(*,*) ,'debug!!!!!!!!!!!!!!!!!!!!!!!'
       call lp%convectiveHeatTrans(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=rho0,gCp=gHeatCap,gk=gHeatCond,Temp=Temp)
       call lp%updateTemp(dt=time%dt)
 

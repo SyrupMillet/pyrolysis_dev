@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME ?= /home/ubuntu/NGA_Simu/NGA2
+NGA_HOME = /home/ubuntu/NGA_Simu/NGA2
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -38,6 +38,9 @@ ifdef Ulocs
 endif
 $(info Taking base code from: $(Bdirs))
 
+F90FLAGS += -fcheck=array-temps
+F90FLAGS += -cpp
+
 # Target definition
 all: $(executable)
 	@echo COMPILATION SUCCESSFUL
@@ -45,10 +48,5 @@ all: $(executable)
 # NGA compilation rules
 include $(NGA_HOME)/tools/GNUMake/Make.rules
 
-# Run case in serial
-run: cleanrun
-	mpiexec -n 1 ./nga.dp.gnu.opt.mpi.exe -i input -v 2
-
-cleanrun:
-	rm -r -f ensight monitor
-
+run:
+	mpiexec -n 8 nga.dp.gnu.opt.mpi.exe -i input -v 2

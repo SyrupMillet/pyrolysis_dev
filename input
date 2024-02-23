@@ -56,6 +56,14 @@ initial composition : 1.0 0.0 0.0 0.0 0.0 0.0
 Composition densities : 960.0 800.0 0.38 874.0 4265.0 1.06
 Composition heatCapacities : 2300.0 2367.0 0.0 1700.0 802.0 0.0
 
+# Compositions
+Comp Numbers : 7
+Comp names : Nitrogen Polymer Wax Gas Aromatic Char Liquid
+Comp gas densities : 0.409 0.0 0.0 0.38 0.0 0.0 1.06
+# They are mass compositions
+Gas phase inital composition : 1.0 0.0 0.0 0.0 0.0 0.0 0.0
+Dynamic diffusivity : 0.002
+
 
 # Reaction kinetic parameters
 # 2 vector for k0 and Ea, index correspond to [kpw, kpg, kpl,kwl, kwa, kac]

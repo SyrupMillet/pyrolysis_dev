@@ -54,12 +54,6 @@ module simulation
    character(len=str_medium), dimension(:), allocatable :: SCname
    integer :: compNumbers
 
-   !> reaction kinetic parameters
-   real(WP), dimension(6) :: k0,Ea
-
-
-
-
 
    !> Wallclock time for monitoring
    type :: timer
@@ -118,10 +112,6 @@ contains
       allocate(SCname(compNumbers))
       call param_read('Comp gas densities',rho_gas_comp)
       call param_read('Comp names',SCname)
-      write(*,*) "Comp Numbers: ",compNumbers
-      write(*,*) "Comp gas densities: ",rho_gas_comp
-      write(*,*) "Comp names: ",SCname
-
 
       ! Initialize time tracker with 1 subiterations
       initialize_timetracker: block
@@ -133,7 +123,6 @@ contains
          time%itmax=2
       end block initialize_timetracker
 
-
       ! Initialize timers
       initialize_timers: block
          wt_total%time=0.0_WP; wt_total%percent=0.0_WP
@@ -142,7 +131,6 @@ contains
          wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
       end block initialize_timers
-
 
       ! Create a low Mach flow solver with bconds
       create_flow_solver: block
@@ -196,7 +184,6 @@ contains
 
       end block create_multiscalar
 
-
       ! Allocate work arrays
       allocate_work_arrays: block
          !< FLow solver
@@ -222,27 +209,23 @@ contains
 
       ! initialize gas temperature
       initialize_Gas_Temperature: block
-         call param_read('Fluid initial temperature', initTemp, default=573.15_WP)  !< [K]
+         call param_read('Fluid initial temperature', initTemp, default=573.15_WP)
+         ! TODO: Gas phase properties should be calculated from composition
          call param_read('Fluid heat capacity', gHeatCap, default=1040.0_WP)
          call param_read('Fluid heat conductivity', gHeatConductivity, default=0.0383_WP)
          allocate(gTemp (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          gTemp = initTemp
       end block initialize_Gas_Temperature
 
-      ! Read Reaction kinetic parameters
-      read_kinetic_par: block
-         call param_read('k0',k0)
-         call param_read('Ea',Ea)
-      end block read_kinetic_par
-
       ! Initialize our LPT solver
       initialize_lpt: block
          use random, only: random_uniform
          use mathtools, only: Pi
-         real(WP) :: dp,Hbed,VFavg,Tp,Lpart,Lparty,Lpartz,Volp
-         integer :: i,ix,iy,iz,np,npx,npy,npz
+         use reactionSolver_class, only: reactionSolver
+         real(WP) :: dp,Hbed,VFavg,Tp,Lpart
+         integer :: i,ix,iy,iz,np
          real(WP) :: particleHeatCap
-         real(WP),dimension(6) :: initalComp
+         real(WP),dimension(:),allocatable :: initalComp
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
          ! Get drag model from the inpit
@@ -255,18 +238,26 @@ contains
          lp%filter_width=3.5_WP*cfg%min_meshsize
 
          ! Newly added=============
+         ! Allocate the properties array
+         allocate(lp%densities(compNumbers))
+         allocate(lp%heatCapacities(compNumbers))
+         allocate(lp%nongasMask(compNumbers))
+         allocate(initalComp(compNumbers))
+
          call param_read("Particle heat Capacity", particleHeatCap, default=2.3e3_WP)
-         call param_read("initial composition",initalComp)
+         call param_read("Particle inital composition",initalComp)
          call param_read('Particle numbers', np, default=1)
-         call param_read('Composition densities',lp%densities)
-         call param_read('Composition heatCapacities',lp%heatCapacities)
+         call param_read('Comp nongas densities',lp%densities)
+         call param_read('Comp nongas heatCapacities',lp%heatCapacities)
+         call param_read('Comp nongas mask',lp%nongasMask)
          call param_read('Particle temperature',Tp,default=298.15_WP)
+
+         lp%compNum = compNumbers
 
          ! Root process initializes particles uniformly
          if (lp%cfg%amRoot) then
             Lpart = dp*1.5_WP
             call lp%resize(np)
-
             ! Distribute particles
             ! Now probelem is
             ! It will not run when np > 3
@@ -290,7 +281,7 @@ contains
                ! Locate the particle on the mesh
                lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
 
-               ! newly added
+               ! ===========================newly added
                ! Set the temperature
                lp%p(i)%T=Tp
                ! Initialize other parameters
@@ -299,12 +290,16 @@ contains
                lp%p(i)%initMass = Pi/6*dp**3.0_WP*lp%rho
                lp%p(i)%mass = lp%p(i)%initMass
                ! Set initial particle compositions
-               lp%p(i)%oldMassComp=initalComp
-               lp%p(i)%newMassComp=initalComp
-               ! initalize other changable properties
-               lp%p(i)%avgrho = lp%rho !< it should be based on composition
-               lp%p(i)%avgCp = lp%heatCapacities(1) !< it should be based on composition
+               allocate(lp%p(i)%composition(compNumbers))
 
+               ! initalize other changable properties
+               lp%p(i)%avgrho &
+                     = dot_product(lp%densities,initalComp)
+               lp%p(i)%avgCp &
+                     = dot_product(lp%heatCapacities,initalComp)
+               
+               ! Initialize the reaction solver
+               lp%p(i)%rs = reactionSolver(lp%p(i)%composition)
 
                ! Activate the particle
                lp%p(i)%flag=0
@@ -326,6 +321,9 @@ contains
             print*,"===== Particle Setup Description ====="
             print*,'Number of particles', np
          end if
+
+         deallocate(initalComp)
+
       end block initialize_lpt
 
       ! Create partmesh object for Lagrangian particle output
@@ -431,12 +429,8 @@ contains
          call ens_out%add_scalar('mscdensity',msc%rho)
          ! Add MSC Comp to output
          call ens_out%add_scalar('Comp1_fraction',msc%SC(:,:,:,1))
-         call ens_out%add_scalar('Comp2_fraction',msc%SC(:,:,:,2))
          call ens_out%add_scalar('Comp3_fraction',msc%SC(:,:,:,3))
          call ens_out%add_scalar('Comp4_fraction',msc%SC(:,:,:,4))
-         call ens_out%add_scalar('Comp5_fraction',msc%SC(:,:,:,5))
-         call ens_out%add_scalar('Comp6_fraction',msc%SC(:,:,:,6))
-         call ens_out%add_scalar('Comp7_fraction',msc%SC(:,:,:,7))
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -512,11 +506,11 @@ contains
          call mscfile%add_column(time%t,'Time')
          call mscfile%add_column(msc%rhomax,'RHOmax')
          call mscfile%add_column(msc%SCmax(1),'Comp1max')
-         call mscfile%add_column(msc%SCmax(4),'Comp4max')
-         call mscfile%add_column(msc%SCmax(7),'Comp7max')
+         call mscfile%add_column(msc%SCmax(3),'Comp4max')
+         call mscfile%add_column(msc%SCmax(4),'Comp7max')
          call mscfile%add_column(msc%SCmin(1),'Comp1min')
-         call mscfile%add_column(msc%SCmin(4),'Comp4min')
-         call mscfile%add_column(msc%SCmin(7),'Comp7min')
+         call mscfile%add_column(msc%SCmin(3),'Comp4min')
+         call mscfile%add_column(msc%SCmin(4),'Comp7min')
          call mscfile%write()
       end block create_monitor
 
@@ -565,8 +559,6 @@ contains
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
 
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
-
-         call lp%react(dt=time%dt,k0Vec=k0,EaVec=Ea,scSRC=MSC_src,massSRC=srcConti)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 

@@ -560,6 +560,8 @@ contains
 
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
 
+         call lp%react(dt=time%dt, T=gTemp, scSRC=MSC_src, massSRC=srcConti)
+
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
          ! Perform sub-iterations

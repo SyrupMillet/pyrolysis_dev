@@ -52,7 +52,7 @@ module simulation
    !> gas density array for computing mean density
    real(WP), dimension(:), allocatable :: rho_gas_comp
    character(len=str_medium), dimension(:), allocatable :: SCname
-   integer :: compNumbers
+   integer:: compNumbers
 
 
    !> Wallclock time for monitoring
@@ -248,8 +248,11 @@ contains
          call param_read("Particle inital composition",initalComp)
          call param_read('Particle numbers', np, default=1)
          call param_read('Comp nongas densities',lp%densities)
+         write(*,*),"Comp nongas densities ", lp%densities
          call param_read('Comp nongas heatCapacities',lp%heatCapacities)
+         write(*,*),"Comp nongas heatCapacities ", lp%heatCapacities
          call param_read('Comp nongas mask',lp%nongasMask)
+         write(*,*),"Comp nongas mask ", lp%nongasMask
          call param_read('Particle temperature',Tp,default=298.15_WP)
 
          lp%compNum = compNumbers
@@ -291,7 +294,9 @@ contains
                lp%p(i)%mass = lp%p(i)%initMass
                ! Set initial particle compositions
                allocate(lp%p(i)%composition(compNumbers))
-
+               lp%p(i)%composition = initalComp
+               write(*,*),"Particle's composition address",loc(lp%p(i)%composition)
+               write(*,*),"Intial composition address",loc(initalComp)
                ! initalize other changable properties
                lp%p(i)%avgrho &
                      = dot_product(lp%densities,initalComp)
@@ -300,6 +305,8 @@ contains
                
                ! Initialize the reaction solver
                lp%p(i)%rs = reactionSolver(lp%p(i)%composition)
+
+               call lp%p(i)%rs%proceedReaction(time%dt,773.15_WP)
 
                ! Activate the particle
                lp%p(i)%flag=0
@@ -366,7 +373,7 @@ contains
          call msc%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            msc%SC(i,j,k,:)=[1.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP]
+            msc%SC(i,j,k,:)=[1.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP]
          end do
 
          ! Compute density
@@ -560,7 +567,7 @@ contains
 
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
 
-         call lp%react(dt=time%dt, T=gTemp, scSRC=MSC_src, massSRC=srcConti)
+         call lp%react(dt=time%dt, scSRC=MSC_src, massSRC=srcConti)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
@@ -591,14 +598,14 @@ contains
             call msc%get_bcond('inflow',mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               msc%SC(i,j,k,:)=[1.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP]
+               msc%SC(i,j,k,:)=[1.0_WP,0.0_WP,0.0_WP,0.0_WP,0.0_WP]
             end do
 
             call msc%apply_bcond(time%t,time%dt)
-
             call get_mv_rho()
             call msc%get_max()
             call msc%get_int()
+
             ! ===================================================
 
             wt_vel%time_in=parallel_time()
@@ -636,8 +643,11 @@ contains
                end do
             end block add_lpt_src
 
+
+            write(*,*) "Before solve implicit"
             ! Form implicit residuals
             call fs%solve_implicit(time%dtmid,resU,resV,resW)
+            write(*,*) "After solve implicit"
 
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU

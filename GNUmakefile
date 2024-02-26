@@ -40,12 +40,13 @@ ifdef Ulocs
 endif
 $(info Taking base code from: $(Bdirs))
 
-F90FLAGS += -fcheck=array-temps
+# F90FLAGS += -fcheck=array-temps
 F90FLAGS += -cpp
 
 fincludes += -I/usr/local/fortran
 LDFLAGS += -L/usr/local/lib
-libraries += -lsundials_fcvode_mod
+libraries += -lsundials_fcvode_mod -lsundials_fsunlinsoldense_mod -lsundials_fsunmatrixdense_mod -lsundials_fsunmatrixband_mod\
+	-lsundials_fsunmatrixsparse_mod
 
 # Target definition
 all: $(executable)
@@ -55,4 +56,4 @@ all: $(executable)
 include $(NGA_HOME)/tools/GNUMake/Make.rules
 
 run:
-	mpiexec -n 8 nga.dp.gnu.opt.mpi.exe -i input -v 2
+	mpiexec -n 1 nga.dp.gnu.opt.mpi.exe -i input -v 2

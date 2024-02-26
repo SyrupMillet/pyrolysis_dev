@@ -1,0 +1,5 @@
+build/*
+monitor/*
+ensight/*
+nga.dp.gnu.opt.mpi.exe
+log

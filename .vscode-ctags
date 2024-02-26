@@ -1,0 +1,18 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+Bdirs	GNUmakefile	/^Bdirs   := variable_density particles core data solver config grid libraries$/;"	m
+COMP	GNUmakefile	/^COMP      = gnu$/;"	m
+DEBUG	GNUmakefile	/^DEBUG     = FALSE$/;"	m
+EXEBASE	GNUmakefile	/^EXEBASE   = nga$/;"	m
+NGA_HOME	GNUmakefile	/^NGA_HOME = \/home\/ubuntu\/NGA_Simu\/NGA2$/;"	m
+PRECISION	GNUmakefile	/^PRECISION = DOUBLE$/;"	m
+PROFILE	GNUmakefile	/^PROFILE   = FALSE$/;"	m
+USE_HYPRE	GNUmakefile	/^USE_HYPRE = TRUE$/;"	m
+USE_IRL	GNUmakefile	/^USE_IRL   = FALSE$/;"	m
+USE_LAPACK	GNUmakefile	/^USE_LAPACK= TRUE$/;"	m
+USE_MPI	GNUmakefile	/^USE_MPI   = TRUE$/;"	m
+Udirs	GNUmakefile	/^Udirs   := src$/;"	m

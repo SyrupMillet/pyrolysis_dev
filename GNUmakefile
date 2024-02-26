@@ -43,10 +43,9 @@ $(info Taking base code from: $(Bdirs))
 # F90FLAGS += -fcheck=array-temps
 F90FLAGS += -cpp
 
-fincludes += -I/usr/local/fortran
-LDFLAGS += -L/usr/local/lib
-libraries += -lsundials_fcvode_mod -lsundials_fsunlinsoldense_mod -lsundials_fsunmatrixdense_mod -lsundials_fsunmatrixband_mod\
-	-lsundials_fsunmatrixsparse_mod
+fincludes += -I$(CVODE_INCLUDE_PATH)
+LDFLAGS += -L$(CVODE_LIB_PATH)
+libraries += -lsundials_fcvode_mod
 
 # Target definition
 all: $(executable)

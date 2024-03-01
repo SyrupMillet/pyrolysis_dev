@@ -41,6 +41,7 @@ module dev_lpt_class
 
       ! newly added===========================
       real(WP), dimension(:), allocatable :: composition  !< Mass fractrion of each component
+      real(WP) :: compositionAddress
       real(WP) :: initMass
       real(WP) :: mass
       real(WP) :: T                        !< Temperature
@@ -161,6 +162,7 @@ module dev_lpt_class
 
       procedure :: updateTemp
       procedure :: react                             !< Composition change cuz reaction
+      procedure :: redirectReactComp
       procedure :: updateProperties                  !< Update mass, density, diameter and other properties
    end type lpt
 
@@ -1969,16 +1971,28 @@ contains
       !< Local variables
       integer :: i
 
+      call this%redirectReactComp()
+
       reaction: do i=1,this%np_
          if (this%p(i)%id.le.0) cycle reaction
-         write(*,*) "[Debug][react] Before reaction: ", this%p(i)%composition
-         write(*,*),"[Reaction]Particle's composition address",loc(this%p(i)%composition)
          call this%p(i)%rs%proceedReaction(dt=dt,T=this%p(i)%T)
-         write(*,*) "[Debug][react] After reaction: ", this%p(i)%composition
       end do reaction
 
       call this%updateProperties()
    end subroutine react
+ 
+   subroutine redirectReactComp(this)
+      implicit none
+      class(lpt), intent(inout) :: this
+      integer :: i
+      redirect: do i=1,this%np_
+         if (this%p(i)%id.le.0) cycle redirect
+         if (this%p(i)%compositionAddress /= loc(this%p(i)%composition)) then
+            call this%p(i)%rs%resetCompAddress(this%p(i)%composition)
+            this%p(i)%compositionAddress = loc(this%p(i)%composition)
+         end if
+      end do redirect
+   end subroutine redirectReactComp
 
 
    subroutine updateProperties(this)

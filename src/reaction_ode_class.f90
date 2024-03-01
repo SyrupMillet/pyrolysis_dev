@@ -69,7 +69,7 @@ contains
       end if
 
       call c_f_pointer(user_data, T)
-      write(*,*) 'T = ', T
+      ! write(*,*) 'T = ', T
 
       ! calculate kinetic parameters based on T
       k1 = k0(1) * exp(-Ea(1)*1000.0/(8.3145*T))
@@ -131,7 +131,7 @@ contains
       real(c_double), pointer :: Jmat(:)
 
       call c_f_pointer(user_data, T)
-      write(*,*) '[JacFunc]T = ', T
+      ! write(*,*) '[JacFunc]T = ', T
       !======= Internals ============
 
       ! get data array from SUNDIALS vector
@@ -159,7 +159,7 @@ contains
       ! fvec(4) = k2*yvec(2)+k5*yvec(5)
       ! fvec(5) = k3*yvec(2)-k4*yvec(5)-k5*yvec(5)
       ! fill Jacobian matrix
-      Jmat = [1.0d0,0.0d0,0.0d0,0.0d0,0.0d0,&
+      Jmat = [0.0d0,0.0d0,0.0d0,0.0d0,0.0d0,&
                0.0d0,-(k1+k2+k3),k1,k2,k3,&
                0.0d0,0.0d0,0.0d0,0.0d0,0.0d0,&
                0.0d0,0.0d0,0.0d0,0.0d0,0.0d0,&
@@ -205,6 +205,7 @@ module reactionSolver_class
 
    contains
       procedure :: proceedReaction
+      procedure :: resetCompAddress
       procedure :: clean
    end type reactionSolver
 
@@ -284,18 +285,40 @@ contains
       real(c_double)                 :: tcur(1)      ! current time
       ! Assign Temperature userdata
       ierr = FCVodeSetUserData(self%cvode_mem, c_loc(T))
-      !   if (ierr /= 0) then
-      !    print *, 'ERROR: FCVodeSetUserData failed'
-      !    stop 1
-      ! end if
+        if (ierr /= 0) then
+         print *, 'ERROR: FCVodeSetUserData failed'
+         stop 1
+      end if
 
       ierr = FCVode(self%cvode_mem, (self%t_cur+dt), self%sunvec_y, tcur, CV_NORMAL)
+
       if (ierr /= 0) then
          print *, 'ERROR: FCVode failed', ierr
          stop 1
       end if
+
+      
+
       self%t_cur = self%t_cur + dt
    end subroutine proceedReaction
+
+   subroutine resetCompAddress(self, composition)
+      implicit none
+      class(reactionSolver) :: self
+      real(c_double), dimension(neq), intent(inout) :: composition
+      call FN_VDestroy(self%sunvec_y)
+      self%sunvec_y => FN_VMake_Serial(neq, composition, self%ctx)
+      if (.not. associated(self%sunvec_y)) then
+         print *, 'ERROR: sunvec = NULL'
+         stop 1
+      end if
+      ierr = FCVodeReInit(self%cvode_mem, self%t_cur, self%sunvec_y)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeReInit failed'
+         stop 1
+      end if
+   end subroutine resetCompAddress
+
 
    subroutine clean(self)
       use fcvode_mod

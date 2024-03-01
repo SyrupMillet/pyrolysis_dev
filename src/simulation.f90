@@ -32,7 +32,7 @@ module simulation
    type(event)    :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,lptfile,tfile,mscfile
+   type(monitor) :: mfile,cflfile,lptfile,tfile,mscfile,rctfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -248,11 +248,11 @@ contains
          call param_read("Particle inital composition",initalComp)
          call param_read('Particle numbers', np, default=1)
          call param_read('Comp nongas densities',lp%densities)
-         write(*,*),"Comp nongas densities ", lp%densities
+         ! write(*,*),"Comp nongas densities ", lp%densities
          call param_read('Comp nongas heatCapacities',lp%heatCapacities)
-         write(*,*),"Comp nongas heatCapacities ", lp%heatCapacities
+         ! write(*,*),"Comp nongas heatCapacities ", lp%heatCapacities
          call param_read('Comp nongas mask',lp%nongasMask)
-         write(*,*),"Comp nongas mask ", lp%nongasMask
+         ! write(*,*),"Comp nongas mask ", lp%nongasMask
          call param_read('Particle temperature',Tp,default=298.15_WP)
 
          lp%compNum = compNumbers
@@ -295,8 +295,7 @@ contains
                ! Set initial particle compositions
                allocate(lp%p(i)%composition(compNumbers))
                lp%p(i)%composition = initalComp
-               write(*,*),"Particle's composition address",loc(lp%p(i)%composition)
-               write(*,*),"Intial composition address",loc(initalComp)
+               lp%p(i)%compositionAddress = loc(lp%p(i)%composition)
                ! initalize other changable properties
                lp%p(i)%avgrho &
                      = dot_product(lp%densities,initalComp)
@@ -305,8 +304,6 @@ contains
                
                ! Initialize the reaction solver
                lp%p(i)%rs = reactionSolver(lp%p(i)%composition)
-
-               call lp%p(i)%rs%proceedReaction(time%dt,773.15_WP)
 
                ! Activate the particle
                lp%p(i)%flag=0
@@ -519,6 +516,16 @@ contains
          call mscfile%add_column(msc%SCmin(3),'Comp4min')
          call mscfile%add_column(msc%SCmin(4),'Comp7min')
          call mscfile%write()
+         ! Create Reaction monitor
+         rctfile=monitor(fs%cfg%amRoot,'react')
+         call rctfile%add_column(time%n,'Timestep number')
+         call rctfile%add_column(time%t,'Time')
+         call rctfile%add_column(lp%p(1)%composition(1),'Comp1')
+         call rctfile%add_column(lp%p(1)%composition(2),'Comp2')
+         call rctfile%add_column(lp%p(1)%composition(3),'Comp3')
+         call rctfile%add_column(lp%p(1)%composition(4),'Comp4')
+         call rctfile%add_column(lp%p(1)%composition(5),'Comp5')
+         call rctfile%write()
       end block create_monitor
 
    end subroutine simulation_init
@@ -643,11 +650,8 @@ contains
                end do
             end block add_lpt_src
 
-
-            write(*,*) "Before solve implicit"
             ! Form implicit residuals
             call fs%solve_implicit(time%dtmid,resU,resV,resW)
-            write(*,*) "After solve implicit"
 
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU
@@ -731,6 +735,7 @@ contains
          call cflfile%write()
          call lptfile%write()
          call mscfile%write()
+         call rctfile%write()
          ! Monitor timing
          wt_total%time=parallel_time()-wt_total%time_in
          wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP

@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME = /home/ubuntu/NGA_Simu/NGA2
+NGA_HOME ?= ../../NGA2/
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -23,8 +23,8 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-CVODE_INCLUDE_PATH = /usr/local/fortran
-CVODE_LIB_PATH = /usr/local/lib
+CVODE_INCLUDE_PATH ?= /usr/local/fortran
+CVODE_LIB_PATH ?= /usr/local/lib
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
@@ -45,7 +45,7 @@ F90FLAGS += -cpp -g
 
 fincludes += -I$(CVODE_INCLUDE_PATH)
 LDFLAGS += -L$(CVODE_LIB_PATH)
-libraries += -lsundials_fcvode_mod
+libraries += -l:libsundials_fcvode_mod.a -l:libsundials_cvode.a 
 
 # Target definition
 all: $(executable)

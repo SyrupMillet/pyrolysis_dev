@@ -102,7 +102,6 @@ contains
       implicit none
       class(reaction_lpt), INTENT(INOUT) :: self
       real(WP), target, INTENT(IN) :: time, dt
-      write(*,*) '[Reaction Solver] Start to solve ODE for particles in lpt...'
       call self%syncLpt(time)
       call self%proceedReact(time, dt)
       call self%writeBackLpt()

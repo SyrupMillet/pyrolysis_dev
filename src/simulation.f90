@@ -13,7 +13,9 @@ module simulation
    use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
-   use string, only: str_medium
+   use string,             only: str_medium
+   use reaction_lpt_class, only: reaction_lpt
+   use react_ode_mod
    implicit none
    private
 
@@ -23,6 +25,7 @@ module simulation
    type(ddadi),       public :: mss
    type(lowmach),     public :: fs
    type(lpt),         public :: lp
+   type(reaction_lpt), public :: rlp
    type(multivdscalar), public :: msc
    type(timetracker), public :: time
 
@@ -295,15 +298,11 @@ contains
                ! Set initial particle compositions
                allocate(lp%p(i)%composition(compNumbers))
                lp%p(i)%composition = initalComp
-               lp%p(i)%compositionAddress = loc(lp%p(i)%composition)
                ! initalize other changable properties
                lp%p(i)%avgrho &
                      = dot_product(lp%densities,initalComp)
                lp%p(i)%avgCp &
                      = dot_product(lp%heatCapacities,initalComp)
-               
-               ! Initialize the reaction solver
-               lp%p(i)%rs = reactionSolver(lp%p(i)%composition)
 
                ! Activate the particle
                lp%p(i)%flag=0
@@ -329,6 +328,10 @@ contains
          deallocate(initalComp)
 
       end block initialize_lpt
+
+      initialize_reaction_lpt: block
+         rlp = reaction_lpt(cfg=cfg,lp=lp, RhsFunc=c_funloc(RhsFn), JacFunc=c_funloc(JacFn))
+      end block initialize_reaction_lpt
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
@@ -574,7 +577,7 @@ contains
 
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
 
-         call lp%react(dt=time%dt, scSRC=MSC_src, massSRC=srcConti)
+         call rlp%react(time=time%t,dt=time%dt)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 

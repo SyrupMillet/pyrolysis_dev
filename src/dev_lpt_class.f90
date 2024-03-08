@@ -9,7 +9,6 @@ module dev_lpt_class
    use config_class,   only: config
    use diag_class,     only: diag
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
-   use reactionSolver_class, only: reactionSolver
    implicit none
    private
 
@@ -41,16 +40,12 @@ module dev_lpt_class
 
       ! newly added===========================
       real(WP), dimension(:), allocatable :: composition  !< Mass fractrion of each component
-      real(WP) :: compositionAddress
       real(WP) :: initMass
       real(WP) :: mass
       real(WP) :: T                        !< Temperature
       real(WP) :: dTdt                     !< Tempreture change rate for reaction
       real(WP) :: avgrho
       real(WP) :: avgCp
-
-      type(reactionSolver) :: rs !< Reaction solver object
-
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
@@ -161,8 +156,6 @@ module dev_lpt_class
       ! new procedures are added here
 
       procedure :: updateTemp
-      procedure :: react                             !< Composition change cuz reaction
-      procedure :: redirectReactComp
       procedure :: updateProperties                  !< Update mass, density, diameter and other properties
    end type lpt
 
@@ -1910,9 +1903,7 @@ contains
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U, V, W
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gTemp
@@ -1955,62 +1946,19 @@ contains
 
    end subroutine updateTemp
 
-!< First react and change particle properties
-!< Then
-!< get each source term for multi-variable trasnport equation solver
-!< get mass source term for continuity equation
-!< Unit: [kg/m^3/s]
-   subroutine react(this,dt,scSRC, massSRC)
-      use mathtools, only: Pi
-      implicit none
-      !< Input arguments
-      class(lpt), intent(inout) :: this
-      real(WP) :: dt
-      real(WP), dimension(:,:,:), intent(inout) :: massSRC
-      real(WP), dimension(:,:,:,:), intent(inout) :: scSRC
-      !< Local variables
-      integer :: i
-
-      call this%redirectReactComp()
-
-      reaction: do i=1,this%np_
-         if (this%p(i)%id.le.0) cycle reaction
-         call this%p(i)%rs%proceedReaction(dt=dt,T=this%p(i)%T)
-      end do reaction
-
-      call this%updateProperties()
-   end subroutine react
- 
-   subroutine redirectReactComp(this)
-      implicit none
-      class(lpt), intent(inout) :: this
-      integer :: i
-      redirect: do i=1,this%np_
-         if (this%p(i)%id.le.0) cycle redirect
-         if (this%p(i)%compositionAddress /= loc(this%p(i)%composition)) then
-            call this%p(i)%rs%resetCompAddress(this%p(i)%composition)
-            this%p(i)%compositionAddress = loc(this%p(i)%composition)
-         end if
-      end do redirect
-   end subroutine redirectReactComp
-
-
    subroutine updateProperties(this)
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
       real(WP) :: mass
       real(WP), dimension(:),allocatable :: tmpComp
-      integer :: i,j
-      ! write(*,*) "[Debug][updateProperties] The number of particles: ", this%np_
+      integer :: i
       allocate(tmpComp(this%compNum))
       updateppro: do i=1,this%np_
          if (this%p(i)%id.le.0) cycle updateppro
          ! store the composition of the particle
          tmpComp = this%p(i)%composition
-         ! write(*,*) "[Debug][updateProperties] The composition of particle: ", tmpComp
          tmpComp = tmpComp*this%nongasMask !< only use thos non-gas components
-         ! write(*,*) "[Debug][updateProperties] The non-gas composition of particle: ", tmpComp
          ! < use non-normalized mass fraction to calculate mass and diameter
          ! get new mass
          mass = sum(tmpComp)*this%p(i)%initMass
@@ -2021,11 +1969,9 @@ contains
          ! < use normalized mass fraction to get averaged properties
          ! update averaged density,heatCapacity
          tmpComp = tmpComp/sum(tmpComp)
-         ! write(*,*) "[Debug][updateProperties] The normalized non-gas composition of particle: ", tmpComp
          this%p(i)%avgrho = dot_product(tmpComp,this%densities)
          this%p(i)%avgCp = dot_product(tmpComp,this%heatCapacities)
       end do updateppro
-      ! write(*,*) "[Debug][updateProperties] Finish update properties of particles."
       deallocate(tmpComp)
    end subroutine updateProperties
 

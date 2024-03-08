@@ -1,5 +1,7 @@
 build/*
 monitor/*
 ensight/*
+.vscode/*
+.vscode-ctags
 nga.dp.gnu.opt.mpi.exe
 log

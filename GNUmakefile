@@ -41,7 +41,7 @@ endif
 $(info Taking base code from: $(Bdirs))
 
 # F90FLAGS += -fcheck=array-temps
-F90FLAGS += -cpp -g
+F90FLAGS += -cpp
 
 fincludes += -I$(CVODE_INCLUDE_PATH)
 LDFLAGS += -L$(CVODE_LIB_PATH)

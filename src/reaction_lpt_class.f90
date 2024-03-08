@@ -106,7 +106,6 @@ contains
       call self%syncLpt(time)
       call self%proceedReact(time, dt)
       call self%writeBackLpt()
-      write(*,*) '[Reaction Solver] check', self%head%composition
    end subroutine react
 
 
@@ -137,21 +136,32 @@ contains
       !< Compare and get new and dead particles in reaction solver
       allocate(newParticles(activeInLpt))
       newCount = 0
-      do i=1, activeInLpt
-         if (all(self%activeParticles /= activelptParticles(i))) then
-            newCount = newCount + 1
-            newParticles(newCount) = activelptParticles(i)
-         end if
-      end do
+      if (self%np_ == 0) then
+         newParticles = activelptParticles
+         newCount = activeInLpt
+      else
+         do i=1, activeInLpt
+            if (all(self%activeParticles /= activelptParticles(i))) then
+               newCount = newCount + 1
+               newParticles(newCount) = activelptParticles(i)
+            end if
+         end do
+      end if
 
       allocate(deadParticles(self%np_))
       deadCount = 0
-      do i=1, self%np_
-         if (all(activelptParticles /= self%activeParticles(i))) then
-            deadCount = deadCount + 1
-            deadParticles(deadCount) = self%activeParticles(i)
-         end if
-      end do
+      if (activeInLpt == 0) then
+         deadParticles = self%activeParticles
+         deadCount = self%np_
+      else
+         do i=1, self%np_
+            if (all(activelptParticles /= self%activeParticles(i))) then
+               deadCount = deadCount + 1
+               deadParticles(deadCount) = self%activeParticles(i)
+            end if
+         end do
+      end if
+      
 
       !< Add new particles and delete dead particles
       allocate(tempComp(self%compNum))
@@ -310,7 +320,7 @@ contains
       class(reaction_lpt), INTENT(INOUT) :: self
       integer :: i
       integer(kind = 8), dimension(:), allocatable :: activeParticles
-      integer :: count = 0
+      integer :: count
       type(prs), pointer :: current
 
       current => self%head
@@ -321,7 +331,6 @@ contains
       end do
 
       allocate(activeParticles(count))
-
       current => self%head
       do i = 1, count
          activeParticles(i) = current%id

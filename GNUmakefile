@@ -55,4 +55,4 @@ all: $(executable)
 include $(NGA_HOME)/tools/GNUMake/Make.rules
 
 run:
-	mpiexec -n 1 nga.dp.gnu.opt.mpi.exe -i input -v 2
+	mpiexec -n 8 nga.dp.gnu.opt.mpi.exe -i input -v 2

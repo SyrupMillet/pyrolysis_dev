@@ -681,7 +681,7 @@ contains
          call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=msc%rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
 
-         ! call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
+         call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCps=gCpfield,glambdas=gLambdafield,gTemp=gTfield,dt=time%dt,srcTp=srcTp)
 
          call lp%react(time=time%t, dt=time%dt, scSRC=srcMSC, massSRC=srcConti)
 

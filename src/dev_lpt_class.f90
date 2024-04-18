@@ -1909,35 +1909,38 @@ contains
    end subroutine read
 
 
-   subroutine updateTemp(this,U,V,W,visc,rho,gCp,gk,gTemp,dt)
+   subroutine updateTemp(this,U,V,W,visc,rho,gCps,glambdas,gTemp,dt,srcTp)
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gTemp
-      real(WP) :: Udif, Vdif, Wdif, gRho, gVisc, gCp, gk
+      real(WP), dimension(:,:,:), intent(inout) :: U,V,W,visc,rho,gTemp,gCps,glambdas
+      real(WP), dimension(:,:,:), intent(inout) :: srcTp
+      real(WP) :: Udif, Vdif, Wdif, gRho, gVisc, gCp, gk, gT
       real(WP) :: Re, Pr, gEps, source
       real(WP) :: dt, dTdt
 
-      integer :: i
+      integer :: i,ind1,ind2,ind3
       convectionHeatTrans: do i=1,this%np_
          if (this%p(i)%id.le.0) cycle convectionHeatTrans
-         gRho = rho(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
-         gVisc = visc(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
-         Udif = abs(this%p(i)%vel(1)-U(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))  !< get velocity difference between gas and particle
-         Vdif = abs(this%p(i)%vel(2)-V(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))
-         Wdif = abs(this%p(i)%vel(3)-W(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))
-         gEps = (1.0_WP-this%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)))
+
+         ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
+         gRho = rho(ind1,ind2,ind3)
+         gVisc = visc(ind1,ind2,ind3)
+         Udif = abs(this%p(i)%vel(1)-U(ind1,ind2,ind3))  !< get velocity difference between gas and particle
+         Vdif = abs(this%p(i)%vel(2)-V(ind1,ind2,ind3))
+         Wdif = abs(this%p(i)%vel(3)-W(ind1,ind2,ind3))
+         gEps = (1.0_WP-this%VF(ind1,ind2,ind3))
+         gCp = gCps(ind1,ind2,ind3)
+         gk = glambdas(ind1,ind2,ind3)
+         gT = gTemp(ind1,ind2,ind3)
+
          source = getConvHeatSource(Udif=Udif,Vdif=Vdif,Wdif=Wdif,visc=gVisc,charL=this%p(i)%d,rho=gRho&
-            ,gEps=gEps,gCp=gCp,gk=gk,gT=gTemp(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)),pT=this%p(i)%T)
+            ,gEps=gEps,gCp=gCp,gk=gk,gT=gT,pT=this%p(i)%T)
+
+         srcTp(ind1,ind2,ind3) = srcTp(ind1,ind2,ind3) - source
 
          dTdt = source/(this%p(i)%mass*this%p(i)%avgCp)
          this%p(i)%T = this%p(i)%T + dTdt*dt
-         ! write(*,*), "[Heat] Particle id:", this%p(i)%id,"Temperature is: ",this%p(i)%T
 
       end do convectionHeatTrans
 

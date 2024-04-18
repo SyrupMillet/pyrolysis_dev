@@ -9,6 +9,8 @@ module dev_lpt_class
    use config_class,   only: config
    use diag_class,     only: diag
    use mpi_f08,        only: MPI_Datatype,MPI_INTEGER8,MPI_INTEGER,MPI_DOUBLE_PRECISION
+   use reaction_ode_mod, only: neq
+   use reactionSolver_class, only: reactionSolver
    implicit none
    private
 
@@ -39,18 +41,19 @@ module dev_lpt_class
       integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
 
       ! newly added===========================
-      real(WP), dimension(:), allocatable :: composition  !< Mass fractrion of each component
+      real(WP), dimension(neq) :: composition  !< Mass fractrion of each component
+      
       real(WP) :: initMass
       real(WP) :: mass
       real(WP) :: T                        !< Temperature
-      real(WP) :: dTdt                     !< Tempreture change rate for reaction
       real(WP) :: avgrho
       real(WP) :: avgCp
+
    end type part
    !> Number of blocks, block length, and block types in a particle
-   integer, parameter                         :: part_nblock=3
-   integer           , dimension(part_nblock) :: part_lblock=[1,17,4]
-   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
+   integer, parameter                         :: part_nblock=5
+   integer          , dimension(part_nblock) :: part_lblock=[1,17,4,int(neq,4),5]
+   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER,MPI_DOUBLE_PRECISION,MPI_DOUBLE_PRECISION]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
    integer :: MPI_PART_SIZE
@@ -133,7 +136,8 @@ module dev_lpt_class
       real(WP), dimension(:), allocatable :: densities                 !< Density of each component
       real(WP), dimension(:), allocatable :: heatCapacities            !< Heat capacity of each component
 
-
+      ! reaction solver
+      type(reactionSolver) :: reactionSolver
 
    contains
       procedure :: update_partmesh                        !< Update a partmesh object using current particles
@@ -156,6 +160,7 @@ module dev_lpt_class
       ! new procedures are added here
 
       procedure :: updateTemp
+      procedure :: react                             !< Composition change cuz reaction
       procedure :: updateProperties                  !< Update mass, density, diameter and other properties
    end type lpt
 
@@ -175,6 +180,7 @@ contains
       class(config), target, intent(in) :: cfg
       character(len=*), optional :: name
       integer :: i,j,k,l
+      real(WP), dimension(neq) :: tmpComp    !< Temporary composition array for reaction solver init
 
       ! Set the name for the solver
       if (present(name)) self%name=trim(adjustl(name))
@@ -349,6 +355,10 @@ contains
       end do
       call self%cfg%sync(self%Wdist)
       call self%cfg%sync(self%Wnorm)
+
+      ! intiialize reaction solver
+      tmpComp = 0.0_WP
+      self%reactionSolver = reactionSolver(tmpComp)
 
       ! Log/screen output
       logging: block
@@ -1903,7 +1913,9 @@ contains
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
-      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U, V, W
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gTemp
@@ -1946,23 +1958,56 @@ contains
 
    end subroutine updateTemp
 
+!< First react and change particle properties
+!< Then
+!< get each source term for multi-variable trasnport equation solver
+!< get mass source term for continuity equation
+!< Unit: [kg/m^3/s]
+   subroutine react(this,time,dt,scSRC, massSRC)
+      use mathtools, only: Pi
+      implicit none
+      !< Input arguments
+      class(lpt), intent(inout) :: this
+      real(WP) :: dt,time
+      !< Output arguments
+      real(WP), dimension(:,:,:), intent(inout) :: massSRC
+      real(WP), dimension(:,:,:,:), intent(inout) :: scSRC
+      !< Local variables
+      real(WP), dimension(neq) :: tmpComp    !< to restore old composition
+      integer :: i
+
+      reaction: do i=1,this%np_
+         if (this%p(i)%id.le.0) cycle reaction
+         tmpComp = this%p(i)%composition
+         call this%reactionSolver%proceedReaction(time, dt, this%p(i)%T, this%p(i)%composition)
+         !< get source term for each species
+
+      end do reaction
+
+      call this%updateProperties()
+   end subroutine react
+
+
    subroutine updateProperties(this)
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
       real(WP) :: mass
-      real(WP), dimension(:),allocatable :: tmpComp
-      integer :: i
-      allocate(tmpComp(this%compNum))
+      real(WP), dimension(neq) :: tmpComp
+      integer :: i,j
+
       updateppro: do i=1,this%np_
          if (this%p(i)%id.le.0) cycle updateppro
          ! store the composition of the particle
          tmpComp = this%p(i)%composition
+
          tmpComp = tmpComp*this%nongasMask !< only use thos non-gas components
-         ! < use non-normalized mass fraction to calculate mass and diameter
+
+         ! use non-normalized mass fraction to calculate mass and diameter
          ! get new mass
          mass = sum(tmpComp)*this%p(i)%initMass
          this%p(i)%mass = mass
+
          ! get new diameter based on mass and density
          this%p(i)%d = (6*mass/(this%p(i)%avgrho*Pi))**(1.0_WP/3.0_WP)
 
@@ -1972,7 +2017,7 @@ contains
          this%p(i)%avgrho = dot_product(tmpComp,this%densities)
          this%p(i)%avgCp = dot_product(tmpComp,this%heatCapacities)
       end do updateppro
-      deallocate(tmpComp)
+
    end subroutine updateProperties
 
 

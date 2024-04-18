@@ -5,6 +5,7 @@ module simulation
    use dev_lpt_class,     only: lpt
    use ddadi_class,       only: ddadi
    use multivdscalar_class, only: multivdscalar
+   use vdscalar_class,    only: vdscalar
    use hypre_uns_class,   only: hypre_uns
    use hypre_str_class,   only: hypre_str
    use lowmach_class,     only: lowmach
@@ -13,9 +14,7 @@ module simulation
    use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
-   use string,             only: str_medium
-   use reaction_lpt_class, only: reaction_lpt
-   use react_ode_mod
+   use string, only: str_medium
    implicit none
    private
 
@@ -25,7 +24,6 @@ module simulation
    type(ddadi),       public :: mss
    type(lowmach),     public :: fs
    type(lpt),         public :: lp
-   type(reaction_lpt), public :: rlp
    type(multivdscalar), public :: msc
    type(timetracker), public :: time
 
@@ -41,21 +39,22 @@ module simulation
 
    !> Work arrays and fluid properties
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,resRHO,srcConti
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,resRHO
    real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
    real(WP) :: visc,rho,inlet_velocity
+   real(WP), dimension(:,:,:), allocatable :: srcConti !> Continuity source term
 
-   ! 
-   real(WP), dimension(:,:,:,:), allocatable :: resMSC,MSC_src
+   !> Multiscalar solver work arrays
+   real(WP), dimension(:,:,:,:), allocatable :: resMSC,srcMSC
 
    !> Add thermal properties
    real(WP) :: initTemp, gHeatCap, gHeatConductivity
    real(WP), dimension(:,:,:), allocatable :: gTemp
 
    !> gas density array for computing mean density
-   real(WP), dimension(:), allocatable :: rho_gas_comp
+   real(WP), dimension(:), allocatable :: gRhos
    character(len=str_medium), dimension(:), allocatable :: SCname
-   integer:: compNumbers
+   integer:: speciesNum
 
 
    !> Wallclock time for monitoring
@@ -91,17 +90,17 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_of_domain
 
-   subroutine get_mv_rho()
+   subroutine get_msc_rho()
       implicit none
       integer :: i,j,k
       do k=msc%cfg%kmino_,msc%cfg%kmaxo_
          do j=msc%cfg%jmino_,msc%cfg%jmaxo_
             do i=msc%cfg%imino_,msc%cfg%imaxo_
-               msc%rho(i,j,k)=dot_product(msc%SC(i,j,k,:),rho_gas_comp)
+               msc%rho(i,j,k)=dot_product(msc%SC(i,j,k,:),gRhos)
             end do
          end do
       end do
-   end subroutine get_mv_rho
+   end subroutine get_msc_rho
 
 
    !> Initialization of problem solver
@@ -110,11 +109,11 @@ contains
       use string, only: str_medium
       implicit none
 
-      call param_read('Comp Numbers',compNumbers)
-      allocate(rho_gas_comp(compNumbers))
-      allocate(SCname(compNumbers))
-      call param_read('Comp gas densities',rho_gas_comp)
-      call param_read('Comp names',SCname)
+      call param_read('Sprcies Numbers',speciesNum)
+      allocate(gRhos(speciesNum))
+      allocate(SCname(speciesNum))
+      call param_read('Species gas phase densities',gRhos)
+      call param_read('Species names',SCname)
 
       ! Initialize time tracker with 1 subiterations
       initialize_timetracker: block
@@ -169,8 +168,8 @@ contains
          use multivdscalar_class, only: dirichlet,neumann,quick,bquick,upwind
          real(WP) :: diffusivity
          ! Create scalar solver
-         msc=multivdscalar(cfg=cfg,scheme=upwind,nscalar=compNumbers,name='Variable density multi scalar')
-         call param_read('Comp names',msc%SCname)
+         msc=multivdscalar(cfg=cfg,scheme=quick,nscalar=speciesNum,name='Variable density multi scalar')
+         call param_read('Species names',msc%SCname)
 
          call msc%add_bcond(name='inflow',type=dirichlet,locator=left_of_domain,dir='-x')
          ! Outflow on the right
@@ -200,15 +199,15 @@ contains
          allocate(Ui      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-
          allocate(srcConti(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+
          !< Scalar solver
          allocate(resMSC(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
-         allocate(MSC_src(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
+         allocate(srcMSC(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
       end block allocate_work_arrays
 
       srcConti=0.0_WP
-      MSC_src=0.0_WP
+      srcMSC=0.0_WP
 
       ! initialize gas temperature
       initialize_Gas_Temperature: block
@@ -242,31 +241,26 @@ contains
 
          ! Newly added=============
          ! Allocate the properties array
-         allocate(lp%densities(compNumbers))
-         allocate(lp%heatCapacities(compNumbers))
-         allocate(lp%nongasMask(compNumbers))
-         allocate(initalComp(compNumbers))
+         allocate(lp%densities(speciesNum))
+         allocate(lp%heatCapacities(speciesNum))
+         allocate(lp%nongasMask(speciesNum))
+         allocate(initalComp(speciesNum))
 
          call param_read("Particle heat Capacity", particleHeatCap, default=2.3e3_WP)
          call param_read("Particle inital composition",initalComp)
          call param_read('Particle numbers', np, default=1)
          call param_read('Comp nongas densities',lp%densities)
-         ! write(*,*),"Comp nongas densities ", lp%densities
          call param_read('Comp nongas heatCapacities',lp%heatCapacities)
-         ! write(*,*),"Comp nongas heatCapacities ", lp%heatCapacities
          call param_read('Comp nongas mask',lp%nongasMask)
-         ! write(*,*),"Comp nongas mask ", lp%nongasMask
          call param_read('Particle temperature',Tp,default=298.15_WP)
 
-         lp%compNum = compNumbers
+         lp%compNum = speciesNum
 
          ! Root process initializes particles uniformly
          if (lp%cfg%amRoot) then
             Lpart = dp*1.5_WP
             call lp%resize(np)
             ! Distribute particles
-            ! Now probelem is
-            ! It will not run when np > 3
             do i=1,np
                ! Give position
                ix = (i-1)
@@ -287,22 +281,18 @@ contains
                ! Locate the particle on the mesh
                lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
 
-               ! ===========================newly added
                ! Set the temperature
                lp%p(i)%T=Tp
-               ! Initialize other parameters
-               lp%p(i)%dTdt = 0.0_WP
                ! Set initial mass
                lp%p(i)%initMass = Pi/6*dp**3.0_WP*lp%rho
                lp%p(i)%mass = lp%p(i)%initMass
                ! Set initial particle compositions
-               allocate(lp%p(i)%composition(compNumbers))
                lp%p(i)%composition = initalComp
                ! initalize other changable properties
                lp%p(i)%avgrho &
-                     = dot_product(lp%densities,initalComp)
+                  = dot_product(lp%densities,initalComp)
                lp%p(i)%avgCp &
-                     = dot_product(lp%heatCapacities,initalComp)
+                  = dot_product(lp%heatCapacities,initalComp)
 
                ! Activate the particle
                lp%p(i)%flag=0
@@ -325,13 +315,7 @@ contains
             print*,'Number of particles', np
          end if
 
-         deallocate(initalComp)
-
       end block initialize_lpt
-
-      initialize_reaction_lpt: block
-         rlp = reaction_lpt(cfg=cfg,lp=lp, RhsFunc=c_funloc(RhsFn), JacFunc=c_funloc(JacFn))
-      end block initialize_reaction_lpt
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
@@ -359,7 +343,7 @@ contains
          use multivdscalar_class, only: bcond
          integer :: n,i,j,k,isc
          type(bcond), pointer :: mybc
-         real(WP), dimension(compNumbers) :: initComp
+         real(WP), dimension(speciesNum) :: initComp
          call param_read('Gas phase inital composition',initComp)
          ! set initial field
          do k=msc%cfg%kmino_, msc%cfg%kmaxo_
@@ -377,7 +361,7 @@ contains
          end do
 
          ! Compute density
-         call get_mv_rho()
+         call get_msc_rho()
          call msc%get_max()
          call msc%get_int()
 
@@ -402,7 +386,7 @@ contains
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%rhoU(i,j,k)=inlet_velocity*rho_gas_comp(1)
+            fs%rhoU(i,j,k)=inlet_velocity*gRhos(1)
             fs%U(i,j,k)   =inlet_velocity
          end do
          ! Set density from particle volume fraction and store initial density
@@ -577,26 +561,26 @@ contains
 
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCp=gHeatCap,gk=gHeatConductivity,gTemp=gTemp,dt=time%dt)
 
-         call rlp%react(time=time%t,dt=time%dt)
+         call lp%react(time=time%t, dt=time%dt, scSRC=srcMSC, massSRC=srcConti)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-                        ! ============= MULTI SCALAR SOLVER =======================
+            ! ============= MULTI SCALAR SOLVER =======================
             ! Build mid-time scalar
             msc%SC=0.5_WP*(msc%SC+msc%SCold)
 
             call msc%get_drhoSCdt(resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
             ! Assemble explicit residual
             do isc=1,msc%nscalar
-               resMSC(:,:,:,isc)=time%dt*resMSC(:,:,:,isc)-2.0_WP*msc%rho*msc%SC(:,:,:,isc)+(msc%rho+msc%rhoold)*msc%SCold(:,:,:,isc)+time%dt*msc%rho*MSC_src(:,:,:,isc)
+               resMSC(:,:,:,isc)=time%dt*resMSC(:,:,:,isc)-2.0_WP*msc%rho*msc%SC(:,:,:,isc)+(msc%rho+msc%rhoold)*msc%SCold(:,:,:,isc)+time%dt*msc%rho*srcMSC(:,:,:,isc)
             end do
             ! ! Recompute drhoSC/dt
             ! call msc%get_drhoSCdt(resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
             ! ! Assemble explicit residual
             ! do isc=1,msc%nscalar
-            !    resMSC(:,:,:,isc)=(time%dt*resMSC(:,:,:,isc)+msc%rhoold*msc%SCold(:,:,:,isc))/msc%rho-2.0_WP*msc%SC(:,:,:,isc)+msc%SCold(:,:,:,isc)+time%dt*MSC_src(:,:,:,isc)
+            !    resMSC(:,:,:,isc)=(time%dt*resMSC(:,:,:,isc)+msc%rhoold*msc%SCold(:,:,:,isc))/msc%rho-2.0_WP*msc%SC(:,:,:,isc)+msc%SCold(:,:,:,isc)+time%dt*srcMSC(:,:,:,isc)
             ! end do
 
             call msc%solve_implicit(time%dt,resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
@@ -612,7 +596,7 @@ contains
             end do
 
             call msc%apply_bcond(time%t,time%dt)
-            call get_mv_rho()
+            call get_msc_rho()
             call msc%get_max()
             call msc%get_int()
 
@@ -674,7 +658,7 @@ contains
                call fs%get_bcond('inflow',mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%rhoU(i,j,k)=inlet_velocity*rho_gas_comp(1)
+                  fs%rhoU(i,j,k)=inlet_velocity*gRhos(1)
                   fs%U(i,j,k)   =inlet_velocity
                end do
             end block dirichlet_velocity

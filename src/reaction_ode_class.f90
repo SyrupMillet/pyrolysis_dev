@@ -1,7 +1,23 @@
-module react_ode_mod
+! ===========Usage Instruction==========================================
+
+! The only thing you need to modify is in the ode_mod.
+
+! neq is the number of euqations in the ode system.
+
+! You also need to modify the RhsFn and JacFn
+! They are based on your equations
+
+! The reaction kinetic parameters are dynamically calculated
+! So you need to supply activation energy and pre-exponential factor
+
+! =====================================================================
+
+module reaction_ode_mod
    use, intrinsic :: iso_c_binding
 
    implicit none
+   ! number of equations
+   integer(c_long), parameter :: neq = 5
 
    ! kinetic parameters
    real(c_double),dimension(5), parameter :: Ea = [206.2,295.9,206.1,325.2,63.0]
@@ -154,4 +170,183 @@ contains
 
    end function JacFn
 
-end module react_ode_mod
+end module reaction_ode_mod
+
+! Don't modify below this line unless you know what you are doing
+! ----------------------------------------------------------------
+
+module reactionSolver_class
+   use, intrinsic :: iso_c_binding
+   use fsundials_context_mod
+   use fcvode_mod                 ! Fortran interface to CVODE
+   use fnvector_serial_mod        ! Fortran interface to serial N_Vector
+   use fsunmatrix_dense_mod       ! Fortran interface to dense SUNMatrix
+   use fsunlinsol_dense_mod       ! Fortran interface to dense SUNLinearSolver
+   use fsundials_linearsolver_mod ! Fortran interface to generic SUNLinearSolver
+   use fsundials_matrix_mod       ! Fortran interface to generic SUNMatrix
+   use fsundials_nvector_mod      ! Fortran interface to generic N_Vector
+   use reaction_ode_mod                    ! ODE functions
+   use param, only: param_read
+
+   implicit none
+
+   real(c_double)                 :: rtol=1.0d-5, atol=1.0d-10   ! relative and absolute tolerance
+   integer(c_int)                 :: ierr         ! error flag from C functions
+
+   type :: reactionSolver
+      type(c_ptr)                    :: ctx          ! SUNDIALS context
+      type(c_ptr)                    :: cvode_mem    ! CVODE memory
+      type(N_Vector),        pointer :: sunvec_y     ! sundials vector
+      type(SUNMatrix),       pointer :: sunmat_A     ! sundials matrix
+      type(SUNLinearSolver), pointer :: sunlinsol_LS ! sundials linear solver
+
+      real(c_double) :: t_init
+
+   contains
+      procedure :: proceedReaction
+      procedure :: clean
+   end type reactionSolver
+
+   interface reactionSolver
+      procedure constructor
+   end interface reactionSolver
+
+contains
+
+   function constructor(composition) result(self)
+      implicit none
+      type(reactionSolver) :: self
+      real(c_double), dimension(neq), intent(inout) :: composition
+      ierr = FSUNContext_Create(c_null_ptr, self%ctx)
+
+      self%t_init = 0.0d0
+
+      ! create SUNDIALS N_Vector with initial values
+      self%sunvec_y => FN_VMake_Serial(neq, composition, self%ctx)
+      if (.not. associated(self%sunvec_y)) then
+         print *, 'ERROR: sunvec = NULL'
+         stop 1
+      end if
+
+      self%sunmat_A => FSUNDenseMatrix(neq, neq, self%ctx)
+      if (.not. associated(self%sunmat_A)) then
+         print *, 'ERROR: sunmat = NULL'
+         stop 1
+      end if
+
+      ! create a linear solver
+      self%sunlinsol_LS => FSUNLinSol_Dense(self%sunvec_y, self%sunmat_A, self%ctx)
+      if (.not. associated(self%sunlinsol_LS)) then
+         print *, 'ERROR: sunlinsol = NULL'
+         stop 1
+      end if
+
+      ! create CVode memory
+      self%cvode_mem = FCVodeCreate(CV_BDF, self%ctx)
+      if (.not. c_associated(self%cvode_mem)) then
+         print *, 'ERROR: cvode_mem = NULL'
+         stop 1
+      end if
+
+      ! initialize CVode
+      ierr = FCVodeInit(self%cvode_mem, c_funloc(RhsFn), self%t_init, self%sunvec_y)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeInit failed'
+         stop 1
+      end if
+      ! set relative and absolute tolerances
+      ierr = FCVodeSStolerances(self%cvode_mem, rtol, atol)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeInit failed'
+         stop 1
+      end if
+      ! attach linear solver
+      ierr = FCVodeSetLinearSolver(self%cvode_mem, self%sunlinsol_LS, self%sunmat_A)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeInit failed'
+         stop 1
+      end if
+      ! set Jacobian routine
+      ierr = FCVodeSetJacFn(self%cvode_mem, c_funloc(JacFn))
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeInit failed'
+         stop 1
+      end if
+   end function constructor
+
+   subroutine proceedReaction(self,time, dt, T, comp)
+      implicit none
+      class(reactionSolver) :: self
+      real(c_double) :: dt,time
+      real(c_double), target :: T
+      real(c_double), dimension(neq) :: comp
+      real(c_double)                 :: tcur(1)      ! current time
+
+      ! free old sunvecy and linear solver
+      ierr = FSUNLinSolFree(self%sunlinsol_LS)
+      call FN_VDestroy(self%sunvec_y)
+
+      self%sunvec_y => FN_VMake_Serial(neq, comp, self%ctx)
+      if (.not. associated(self%sunvec_y)) then
+         print *, 'ERROR: sunvec = NULL'
+         stop 1
+      end if
+
+      ! re-create linear solver
+      self%sunlinsol_LS => FSUNLinSol_Dense(self%sunvec_y, self%sunmat_A, self%ctx)
+      if (.not. associated(self%sunlinsol_LS)) then
+         print *, 'ERROR: sunlinsol = NULL'
+         stop 1
+      end if
+
+      ! re-set linear solver
+      ierr = FCVodeSetLinearSolver(self%cvode_mem, self%sunlinsol_LS, self%sunmat_A)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeSetLinearSolver failed'
+         stop 1
+      end if
+
+      ! set Jacobian routine
+      ierr = FCVodeSetJacFn(self%cvode_mem, c_funloc(JacFn))
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeSetJacFn failed'
+         stop 1
+      end if
+
+      ! re-init cvode
+      ierr = FCVodeReInit(self%cvode_mem, time, self%sunvec_y)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVodeReInit failed'
+         stop 1
+      end if   
+
+
+
+      ! Assign Temperature userdata
+      ierr = FCVodeSetUserData(self%cvode_mem, c_loc(T))
+        if (ierr /= 0) then
+         print *, 'ERROR: FCVodeSetUserData failed'
+         stop 1
+      end if
+
+      ierr = FCVode(self%cvode_mem, (time+dt), self%sunvec_y, tcur, CV_NORMAL)
+      if (ierr /= 0) then
+         print *, 'ERROR: FCVode failed', ierr
+         stop 1
+      end if
+
+   end subroutine proceedReaction
+
+
+   subroutine clean(self)
+      use fcvode_mod
+      implicit none
+      class(reactionSolver) :: self
+      call FCVodeFree(self%cvode_mem)
+      ierr = FSUNLinSolFree(self%sunlinsol_LS)
+      call FSUNMatDestroy(self%sunmat_A)
+      call FN_VDestroy(self%sunvec_y)
+      ierr = FSUNContext_Free(self%ctx)
+   end subroutine clean
+
+end module reactionSolver_class

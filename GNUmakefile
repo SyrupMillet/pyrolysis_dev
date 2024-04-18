@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME ?= ../../NGA2/
+NGA_HOME = /home/ubuntu/NGA_Simu/NGA2
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -23,8 +23,8 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-CVODE_INCLUDE_PATH ?= /usr/local/fortran
-CVODE_LIB_PATH ?= /usr/local/lib
+CVODE_INCLUDE_PATH = /usr/local/fortran
+CVODE_LIB_PATH = /usr/local/lib
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
@@ -41,7 +41,7 @@ endif
 $(info Taking base code from: $(Bdirs))
 
 # F90FLAGS += -fcheck=array-temps
-F90FLAGS += -cpp
+F90FLAGS += -cpp -g
 
 fincludes += -I$(CVODE_INCLUDE_PATH)
 LDFLAGS += -L$(CVODE_LIB_PATH)
@@ -55,4 +55,4 @@ all: $(executable)
 include $(NGA_HOME)/tools/GNUMake/Make.rules
 
 run:
-	mpiexec -n 8 nga.dp.gnu.opt.mpi.exe -i input -v 2
+	mpiexec -n 8 $(executable) -i input -v 2

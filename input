@@ -25,15 +25,14 @@ Dynamic diffusivity : 0.002
 Particle numbers : 10
 Coefficient of restitution : 0.8
 Friction coefficient : 0.1
-Particle temperature : 500.0
 Particle density :  960
 Particle diameter : 200e-6
 Collision timescale : 15e-4
 
-Particle temperature : 500.0
+Particle temperature : 300.0
 
 # Species properties
-Sprcies Numbers : 5
+Species Numbers : 5
 Species names : Nitrogen Polymer Gas Liquid Wax
 Species gas phase densities : 0.409 0.0 0.38 1.06 0.0
 Species nongas mask : 0 1 0 0 1
@@ -44,7 +43,7 @@ Species nongas heatCapacities : 0.0 2300.0 0.0 0.0 2367.0
 Lewis number : 1.0           !< It will be used to calculate multiscalar diffusivity if is set >0
 Species gas phase heat capacities : 2770.0 2600.0 2450.0 1440.0 1700.0
 Species gas phase heat conductivities : 0.05 0.05 0.05 0.08 0.05 
-inital gas phase temperature : 474.15
+inital gas phase temperature : 300.0
 
 # Inital Mass compositions
 Gas phase inital composition : 1.0 0.0 0.0 0.0 0.0
@@ -52,7 +51,7 @@ Particle inital composition : 0.0 1.0 0.0 0.0 0.0
 
 # For inlet flow 
 Inlet composition : 1.0 0.0 0.0 0.0 0.0 
-Inlet temperature : 773.15
+Inlet temperature : 973.15
 Inlet velocity : 0.1
 
 # Pressure solver
@@ -64,4 +63,4 @@ Implicit tolerance : 	1e-6
 Implicit iteration : 	100
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 1e-2

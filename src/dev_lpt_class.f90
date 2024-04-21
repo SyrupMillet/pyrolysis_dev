@@ -481,7 +481,7 @@ contains
             v1=this%p(i1)%vel
             w1=this%p(i1)%angVel
             d1=this%p(i1)%d
-            m1=this%rho*Pi/6.0_WP*d1**3
+            m1=this%p(i1)%avgrho*Pi/6.0_WP*d1**3
 
             ! First collide with walls
             d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),S=this%Wdist,bc='d')
@@ -571,14 +571,14 @@ contains
                            v2=this%p(i2)%vel
                            w2=this%p(i2)%angVel
                            d2=this%p(i2)%d
-                           m2=this%rho*Pi/6.0_WP*d2**3
+                           m2=this%p(i2)%avgrho*Pi/6.0_WP*d2**3
                         else if (i2.lt.0) then
                            i2=-i2
                            r2=this%g(i2)%pos
                            v2=this%g(i2)%vel
                            w2=this%g(i2)%angVel
                            d2=this%g(i2)%d
-                           m2=this%rho*Pi/6.0_WP*d2**3
+                           m2=this%p(i2)%avgrho*Pi/6.0_WP*d2**3
                         end if
 
                         ! Compute relative information
@@ -740,7 +740,7 @@ contains
             ! Relocalize
             myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
             ! Send source term back to the mesh
-            dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
+            dmom=mydt*acc*this%p(i)%avgrho*Pi/6.0_WP*myp%d**3
             deng=sum(dmom*myp%vel)
             if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
             if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
@@ -866,9 +866,9 @@ contains
             corr=1.0_WP
          end select
          ! Particle response time
-         tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
+         tau=p%avgrho*p%d**2/(18.0_WP*fvisc*corr)
          ! Return acceleration and optimal timestep size
-         acc=(fvel-p%vel)/tau+fstress/this%rho
+         acc=(fvel-p%vel)/tau+fstress/p%avgrho
          opt_dt=tau/real(this%nstep,WP)
       end block compute_drag
 
@@ -1155,7 +1155,7 @@ contains
                   ! Make it an "official" particle
                   this%p(count)%flag=0
                   ! Update the added mass for the timestep
-                  Mtmp = Mtmp + this%rho*Pi/6.0_WP*this%p(count)%d**3
+                  Mtmp = Mtmp + this%p(count)%avgrho*Pi/6.0_WP*this%p(count)%d**3
                end if
             end do
          end if
@@ -1168,7 +1168,7 @@ contains
             if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) this%p(i)%flag=1
             if (this%p(i)%flag.eq.0) then
                ! Update the added mass for the timestep
-               buf = buf + this%rho*Pi/6.0_WP*this%p(i)%d**3
+               buf = buf + this%p(i)%avgrho/6.0_WP*this%p(i)%d**3
                ! Update the max particle id
                maxid = max(maxid,this%p(i)%id)
                ! Increment counter
@@ -1913,8 +1913,8 @@ contains
       use mathtools, only: Pi
       implicit none
       class(lpt), intent(inout) :: this
-      real(WP), dimension(:,:,:), intent(inout) :: U,V,W,visc,rho,gTemp,gCps,glambdas
-      real(WP), dimension(:,:,:), intent(inout) :: srcTp
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout) :: U,V,W,visc,rho,gTemp,gCps,glambdas
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout) :: srcTp
       real(WP) :: Udif, Vdif, Wdif, gRho, gVisc, gCp, gk, gT
       real(WP) :: Re, Pr, gEps, source
       real(WP) :: dt, dTdt
@@ -1924,7 +1924,7 @@ contains
          if (this%p(i)%id.le.0) cycle convectionHeatTrans
 
          ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
-         gRho = rho(ind1,ind2,ind3)
+         gRho = rho(ind1,ind2,ind3)/(1.0_WP-this%VF(ind1,ind2,ind3))
          gVisc = visc(ind1,ind2,ind3)
          Udif = abs(this%p(i)%vel(1)-U(ind1,ind2,ind3))  !< get velocity difference between gas and particle
          Vdif = abs(this%p(i)%vel(2)-V(ind1,ind2,ind3))
@@ -1973,19 +1973,38 @@ contains
       class(lpt), intent(inout) :: this
       real(WP) :: dt,time
       !< Output arguments
-      real(WP), dimension(:,:,:), intent(inout) :: massSRC
-      real(WP), dimension(:,:,:,:), intent(inout) :: scSRC
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout) :: massSRC
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,neq), intent(inout) :: scSRC
       !< Local variables
-      real(WP), dimension(neq) :: tmpComp    !< to restore old composition
-      integer :: i
+      real(WP), dimension(neq) :: oldComp    !< to restore old composition
+      integer :: i,j,k, isc, ind1, ind2, ind3
 
+      !< initialize source term
+      scSRC = 0.0_WP
+      massSRC = 0.0_WP
+
+      !< react each particle
       reaction: do i=1,this%np_
          if (this%p(i)%id.le.0) cycle reaction
-         tmpComp = this%p(i)%composition
+         oldComp = this%p(i)%composition
          call this%reactionSolver%proceedReaction(time, dt, this%p(i)%T, this%p(i)%composition)
+         ! print*, "Particle ID: ", this%p(i)%id, "Temperature:",this%p(i)%T,"Mass:",this%p(i)%mass, "Composition: ", this%p(i)%composition
+         
          !< get source term for each species
-
+         do isc=1,neq
+            if (this%nongasMask(isc).eq.1) cycle
+            ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
+            scSRC(ind1,ind2,ind3,isc) = scSRC(ind1,ind2,ind3,isc) + (this%p(i)%composition(isc)-oldComp(isc))*this%p(i)%mass/dt
+         end do
       end do reaction
+
+      do i=this%cfg%imino_,this%cfg%imaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do k=this%cfg%kmino_,this%cfg%kmaxo_
+               massSRC(i,j,k) = sum(scSRC(i,j,k,:))
+            end do
+         end do
+      end do
 
       call this%updateProperties()
    end subroutine react

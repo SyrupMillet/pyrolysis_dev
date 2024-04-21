@@ -69,7 +69,7 @@ contains
       end if
 
       call c_f_pointer(user_data, T)
-      ! write(*,*) 'T = ', T
+
 
       ! calculate kinetic parameters based on T
       k1 = k0(1) * exp(-Ea(1)*1000.0/(8.3145*T))
@@ -131,7 +131,7 @@ contains
       real(c_double), pointer :: Jmat(:)
 
       call c_f_pointer(user_data, T)
-      ! write(*,*) '[JacFunc]T = ', T
+
       !======= Internals ============
 
       ! get data array from SUNDIALS vector
@@ -274,10 +274,11 @@ contains
       end if
    end function constructor
 
-   subroutine proceedReaction(self,time, dt, T, comp)
+   subroutine proceedReaction(self,time, dt, Temperature, comp)
       implicit none
       class(reactionSolver) :: self
       real(c_double) :: dt,time
+      real(c_double) :: Temperature
       real(c_double), target :: T
       real(c_double), dimension(neq) :: comp
       real(c_double)                 :: tcur(1)      ! current time
@@ -321,7 +322,7 @@ contains
       end if   
 
 
-
+      T = Temperature
       ! Assign Temperature userdata
       ierr = FCVodeSetUserData(self%cvode_mem, c_loc(T))
         if (ierr /= 0) then

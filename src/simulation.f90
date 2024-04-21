@@ -115,6 +115,9 @@ contains
       if (i.eq.pg%imax+1) isIn=.true.
    end function right_of_domain
 
+   !> This subroutine is to get rho for multiscalar
+   !> Note: here the density already multiplied by the volume fraction
+   !> It will also be used to calculate velocity field / other scalars
    subroutine get_msc_rho()
       implicit none
       integer :: i,j,k
@@ -127,7 +130,7 @@ contains
       end do
    end subroutine get_msc_rho
 
-   !< This subroutine is to get rho for temperature
+   !< This subroutine is to get rho for temperature solver
    subroutine get_tp_rho()
       implicit none
       tp%rho = msc%rho
@@ -166,7 +169,7 @@ contains
       use string, only: str_medium
       implicit none
 
-      call param_read('Sprcies Numbers',speciesNum)
+      call param_read('Species Numbers',speciesNum)
 
       ! read species properties
       allocate(gRhos(speciesNum))
@@ -517,9 +520,9 @@ contains
          call get_tp_diff()
 
          ! Compute Temperature,Cp,Lambda fields for output
-         do i=tp%cfg%imin_,tp%cfg%imax_
-            do j=tp%cfg%jmin_,tp%cfg%jmax_
-               do k=tp%cfg%kmin_,tp%cfg%kmax_
+         do i=tp%cfg%imino_,tp%cfg%imaxo_
+            do j=tp%cfg%jmino_,tp%cfg%jmaxo_
+               do k=tp%cfg%kmino_,tp%cfg%kmaxo_
                   gTfield(i,j,k)=initTemp
                   gCpfield(i,j,k)=dot_product(msc%SC(i,j,k,:),gCp)
                   gLambdafield(i,j,k)=dot_product(msc%SC(i,j,k,:),gLambda)
@@ -548,8 +551,7 @@ contains
          call ens_out%add_scalar('Comp4_fraction',msc%SC(:,:,:,4))
          ! Add Temperature to output
          call ens_out%add_scalar('Temperature',gTfield)
-         call ens_out%add_scalar('Tdiff',tp%diff)
-         call ens_out%add_scalar('TCp',tp%SC)
+         call ens_out%add_scalar('Lambda',gLambdafield)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -676,7 +678,8 @@ contains
          wt_lpt%time_in=parallel_time()
          call fs%get_div_stress(resU,resV,resW)
 
-         ! Collide and advance particles
+         ! ================================= Particle soolver ==========================
+
          call lp%collide(dt=time%dtmid)
          call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=msc%rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
@@ -687,9 +690,13 @@ contains
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
+         ! =============================================================================
+
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             ! ============= MULTI SCALAR SOLVER =======================
+            call applyLewisNumber()
+
             !< Reset metrics for bquick
             call msc%metric_reset()
 
@@ -725,7 +732,7 @@ contains
             ! Adjust metrics
             call msc%metric_adjust(mscTmp,bqflag)
 
-            ! re -Assemble explicit residual
+            ! re-Assemble explicit residual
             call msc%get_drhoSCdt(resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
             do isc=1,msc%nscalar
                resMSC(:,:,:,isc)=time%dt*resMSC(:,:,:,isc)&
@@ -876,9 +883,9 @@ contains
          end do
 
          ! Get temperature, averaged Cp and Lambda fields for output
-         do i=tp%cfg%imin_,tp%cfg%imax_
-            do j=tp%cfg%jmin_,tp%cfg%jmax_
-               do k=tp%cfg%kmin_,tp%cfg%kmax_
+         do i=tp%cfg%imino_,tp%cfg%imaxo_
+            do j=tp%cfg%jmino_,tp%cfg%jmaxo_
+               do k=tp%cfg%kmino_,tp%cfg%kmaxo_
                   gCpfield(i,j,k)=dot_product(msc%SC(i,j,k,:),gCp)
                   gTfield(i,j,k)=tp%SC(i,j,k)/gCpfield(i,j,k)
                   gLambdafield(i,j,k)=dot_product(msc%SC(i,j,k,:),gLambda)
@@ -931,7 +938,6 @@ contains
          wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
          wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
-
       end do
 
    end subroutine simulation_run
@@ -948,7 +954,7 @@ contains
       ! timetracker
 
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,resRHO)
+      deallocate(resU,resV,resW,srcUlp,srcVlp,srcWlp,Ui,Vi,Wi,resRHO,resMSC,resTp,mscTmp,bqflag,srcMSC,srcConti,srcTp)
 
    end subroutine simulation_final
 

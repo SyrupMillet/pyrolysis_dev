@@ -19,14 +19,14 @@ module simulation
    private
 
    !> Get an LPT solver, a lowmach solver, and corresponding time tracker, plus a couple of linear solvers
-   type(hypre_uns),   public :: ps
-   type(hypre_str),   public :: vs
-   type(ddadi),       public :: mss,tps
-   type(lowmach),     public :: fs
-   type(lpt),         public :: lp
-   type(multivdscalar), public :: msc
-   type(vdscalar),   public :: tp   !< Temperature solver
-   type(timetracker), public :: time
+   type(hypre_uns),     public :: ps
+   type(hypre_str),     public :: vs
+   type(ddadi),         public :: mss,tps
+   type(lowmach),       public :: fs
+   type(lpt),           public :: lp
+   type(multivdscalar), public :: msc  !< Mass fraction (Composition) solver
+   type(vdscalar),      public :: tp   !< Temperature solver
+   type(timetracker),   public :: time
 
    !> Ensight postprocessing
    type(partmesh) :: pmesh
@@ -40,18 +40,19 @@ module simulation
 
    !> Work arrays and fluid properties
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,rho0,resRHO
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,resRHO
    real(WP), dimension(:,:,:), allocatable :: srcUlp,srcVlp,srcWlp
    real(WP) :: visc
-   real(WP), dimension(:,:,:), allocatable :: srcConti !> Continuity source term
+   real(WP), dimension(:,:,:), allocatable :: srcConti      !> Continuity source term
+   real(WP), dimension(:,:,:), allocatable :: rho0          !> density field
 
    !> Multiscalar solver work arrays
-   real(WP), dimension(:,:,:,:), allocatable :: resMSC,srcMSC,mscTmp
-   logical, dimension(:,:,:,:), allocatable :: bqflag
+   real(WP), dimension(:,:,:,:), allocatable :: resMSC,srcMSC,mscTmp    !< Residuals, source, temp solution for multiscalar solver
+   logical, dimension(:,:,:,:), allocatable :: bqflag                   !< Flag for bquick scheme
+   real(WP), dimension(:,:,:), allocatable :: massFracSum                          !< Sum of mass fractions for check
 
    !> Temperature solver work arrays
-   real(WP), dimension(:,:,:), allocatable :: resTp, tpTmp, srcTp               !< Residuals for temperature solver
-   logical , dimension(:,:,:), allocatable :: bqflagTp                           !< Flag for bquick scheme
+   real(WP), dimension(:,:,:), allocatable :: resTp, srcTp               !< Residuals, source for temperature solver
    real(WP), dimension(:,:,:), allocatable :: gTfield, gCpfield, gLambdafield !< Temperature; Averaged Cp and Lambda fields
 
 
@@ -118,23 +119,18 @@ contains
    !> This subroutine is to get rho for multiscalar
    !> Note: here the density already multiplied by the volume fraction
    !> It will also be used to calculate velocity field / other scalars
-   subroutine get_msc_rho()
+   subroutine get_rho()
       implicit none
       integer :: i,j,k
       do k=msc%cfg%kmino_,msc%cfg%kmaxo_
          do j=msc%cfg%jmino_,msc%cfg%jmaxo_
             do i=msc%cfg%imino_,msc%cfg%imaxo_
+               rho0(i,j,k)=dot_product(msc%SC(i,j,k,:),gRhos)
                msc%rho(i,j,k)=dot_product(msc%SC(i,j,k,:),gRhos)*(1-lp%VF(i,j,k))
             end do
          end do
       end do
-   end subroutine get_msc_rho
-
-   !< This subroutine is to get rho for temperature solver
-   subroutine get_tp_rho()
-      implicit none
-      tp%rho = msc%rho
-   end subroutine get_tp_rho
+   end subroutine get_rho
 
    !< This subroutine is to get averaged lambda/Cp
    !< It's related to the diffusion term of Temp transport equation
@@ -162,6 +158,18 @@ contains
          end do
       end do
    end subroutine applyLewisNumber
+
+   subroutine checkMassFractionSum()
+      implicit none
+      integer :: i,j,k
+      do k=msc%cfg%kmino_,msc%cfg%kmaxo_
+         do j=msc%cfg%jmino_,msc%cfg%jmaxo_
+            do i=msc%cfg%imino_,msc%cfg%imaxo_
+               massFracSum(i,j,k) = sum(msc%SC(i,j,k,:))
+            end do
+         end do
+      end do
+   end subroutine checkMassFractionSum
 
    !> Initialization of problem solver
    subroutine simulation_init
@@ -287,18 +295,19 @@ contains
          allocate(Vi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi      (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(srcConti(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+         allocate(rho0    (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)) ; rho0=0.0_WP
 
          !< Scalar solver
          allocate(resMSC(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(srcMSC(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(mscTmp(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(bqflag(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
-      
+         allocate(massFracSum(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_))
+
          !< Temperature solver
          allocate(resTp   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(tpTmp   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(srcTp   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(bqflagTp(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+
          allocate(gTfield (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gCpfield(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gLambdafield(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -410,14 +419,18 @@ contains
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         integer :: i
-         pmesh=partmesh(nvar=3,nvec=3,name='lpt')
+         integer :: i,j,nvar
+         nvar = 3+speciesNum
+         pmesh=partmesh(nvar=nvar,nvec=3,name='lpt')
          pmesh%varname(1)='diameter'
          pmesh%vecname(1)='velocity'
          pmesh%vecname(2)='ang_vel'
          pmesh%vecname(3)='Fcol'
          pmesh%varname(2)='Temperature'
-         pmesh%varname(3)='ParticleMass'
+         pmesh%varname(3)='mass'
+         do j=1,speciesNum
+            pmesh%varname(3+j)="frac_"//trim(SCname(j))
+         end do
          call lp%update_partmesh(pmesh)
          do i=1,lp%np_
             pmesh%var(1,i)=lp%p(i)%d
@@ -426,6 +439,9 @@ contains
             pmesh%vec(:,3,i)=lp%p(i)%Acol
             pmesh%var(2,i)=lp%p(i)%T
             pmesh%var(3,i)=lp%p(i)%mass
+            do j=1,speciesNum
+               pmesh%var(3+j,i)=lp%p(i)%composition(j)
+            end do
          end do
       end block create_pmesh
 
@@ -452,7 +468,7 @@ contains
          end do
 
          ! Compute density
-         call get_msc_rho()
+         call get_rho()
          call msc%get_max()
          call msc%get_int()
 
@@ -462,6 +478,9 @@ contains
             call msc%cfg%sync(msc%SC  (:,:,:,isc))
             call msc%cfg%sync(msc%diff(:,:,:,isc))
          end do
+
+         call checkMassFractionSum()
+
       end block initialize_multiscalar
 
       ! Initialize our velocity field
@@ -516,7 +535,8 @@ contains
 
          call tp%apply_bcond(time%t,time%dt)
 
-         call get_tp_rho()
+         tp%rho=msc%rho
+
          call get_tp_diff()
 
          ! Compute Temperature,Cp,Lambda fields for output
@@ -534,6 +554,7 @@ contains
 
       ! Add Ensight output
       create_ensight: block
+         integer :: i
          ! Create Ensight output from cfg
          ens_out=ensight(cfg=cfg,name='pyrolysisFBed')
          ! Create event for Ensight output
@@ -542,16 +563,17 @@ contains
          ! Add variables to output
          call ens_out%add_particle('particles',pmesh)
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('epsp',lp%VF)
+         call ens_out%add_scalar('particleVF',lp%VF)
          call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_scalar('mscdensity',msc%rho)
+         call ens_out%add_scalar('density',rho0)
+         call ens_out%add_scalar('divergence',fs%div)
+         call ens_out%add_scalar('massFractionSum',massFracSum)
          ! Add MSC Comp to output
-         call ens_out%add_scalar('Comp1_fraction',msc%SC(:,:,:,1))
-         call ens_out%add_scalar('Comp3_fraction',msc%SC(:,:,:,3))
-         call ens_out%add_scalar('Comp4_fraction',msc%SC(:,:,:,4))
+         do i=1,speciesNum
+            call ens_out%add_scalar("frac_"//trim(SCname(i)),msc%SC(:,:,:,i))
+         end do
          ! Add Temperature to output
          call ens_out%add_scalar('Temperature',gTfield)
-         call ens_out%add_scalar('Lambda',gLambdafield)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -673,7 +695,6 @@ contains
          tp%rhoold = tp%rho
          tp%SCold = tp%SC
 
-
          ! Get fluid stress
          wt_lpt%time_in=parallel_time()
          call fs%get_div_stress(resU,resV,resW)
@@ -684,8 +705,10 @@ contains
          call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=msc%rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
 
-         call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=msc%rho,gCps=gCpfield,glambdas=gLambdafield,gTemp=gTfield,dt=time%dt,srcTp=srcTp)
+         !< Update temperature
+         call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=rho0,gCps=gCpfield,glambdas=gLambdafield,gTemp=gTfield,dt=time%dt,srcTp=srcTp)
 
+         !< Reaction
          call lp%react(time=time%t, dt=time%dt, scSRC=srcMSC, massSRC=srcConti)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
@@ -753,13 +776,13 @@ contains
             end do
             call msc%apply_bcond(time%t,time%dt)
 
-            call get_msc_rho()
+            call get_rho()
             call msc%get_max()
             call msc%get_int()
 
             ! ===================== Temperature Solver =====================
             ! Get Temperature rho and diffusivity
-            call get_tp_rho() 
+            tp%rho=msc%rho
             call get_tp_diff()
 
             ! Build mid-time temperature*Cp
@@ -882,6 +905,8 @@ contains
 
          end do
 
+         ! ==================== Post Process ==================================
+
          ! Get temperature, averaged Cp and Lambda fields for output
          do i=tp%cfg%imino_,tp%cfg%imaxo_
             do j=tp%cfg%jmino_,tp%cfg%jmaxo_
@@ -893,6 +918,9 @@ contains
             end do
          end do
 
+         !< check mass fraction sum
+         call checkMassFractionSum()
+
          ! Recompute interpolated velocity and divergence
          wt_vel%time_in=parallel_time()
          call fs%interp_vel(Ui,Vi,Wi)
@@ -903,7 +931,7 @@ contains
          ! Output to ensight
          if (ens_evt%occurs()) then
             update_pmesh: block
-               integer :: i
+               integer :: i,j
                call lp%update_partmesh(pmesh)
                do i=1,lp%np_
                   pmesh%var(1,i)=lp%p(i)%d
@@ -912,6 +940,9 @@ contains
                   pmesh%vec(:,3,i)=lp%p(i)%Acol
                   pmesh%var(2,i)=lp%p(i)%T
                   pmesh%var(3,i)=lp%p(i)%mass
+                  do j=1,speciesNum
+                     pmesh%var(3+j,i)=lp%p(i)%composition(j)
+                  end do
                end do
             end block update_pmesh
             call ens_out%write_data(time%t)

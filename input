@@ -3,14 +3,14 @@ Partition :	8 1 1
 
 # Mesh definition
 Lx :	.0256
-Ly :	.0128
+Ly :	.0064
 Lz :	2.19e-4
 nx :	128
-ny :	64
+ny :	32
 nz :	1
 
 # Time integration
-Max timestep size :	1e-4
+Max timestep size :	1e-5
 Max cfl number :	1
 Max time : 		10
 
@@ -22,12 +22,12 @@ Gravity :   -9.81 0 0
 Dynamic diffusivity : 0.002
 
 # Particle parameters
-Particle numbers : 10
+Particle numbers : 60
 Coefficient of restitution : 0.8
 Friction coefficient : 0.1
 Particle density :  960
 Particle diameter : 200e-6
-Collision timescale : 15e-4
+Collision timescale : 15e-5
 
 Particle temperature : 300.0
 
@@ -52,7 +52,7 @@ Particle inital composition : 0.0 1.0 0.0 0.0 0.0
 # For inlet flow 
 Inlet composition : 1.0 0.0 0.0 0.0 0.0 
 Inlet temperature : 973.15
-Inlet velocity : 0.1
+Inlet velocity : 0.3
 
 # Pressure solver
 Pressure tolerance : 	1e-5

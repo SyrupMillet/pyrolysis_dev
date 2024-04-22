@@ -1924,21 +1924,23 @@ contains
          if (this%p(i)%id.le.0) cycle convectionHeatTrans
 
          ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
-         gRho = rho(ind1,ind2,ind3)/(1.0_WP-this%VF(ind1,ind2,ind3))
-         gVisc = visc(ind1,ind2,ind3)
+         gRho = rho(ind1,ind2,ind3)                      !< get gas density
+         gVisc = visc(ind1,ind2,ind3)                    !< get gas viscosity
          Udif = abs(this%p(i)%vel(1)-U(ind1,ind2,ind3))  !< get velocity difference between gas and particle
          Vdif = abs(this%p(i)%vel(2)-V(ind1,ind2,ind3))
          Wdif = abs(this%p(i)%vel(3)-W(ind1,ind2,ind3))
-         gEps = (1.0_WP-this%VF(ind1,ind2,ind3))
-         gCp = gCps(ind1,ind2,ind3)
-         gk = glambdas(ind1,ind2,ind3)
-         gT = gTemp(ind1,ind2,ind3)
+         gEps = (1.0_WP-this%VF(ind1,ind2,ind3))         !< get gas volume fraction
+         gCp = gCps(ind1,ind2,ind3)                      !< get gas heat capacity
+         gk = glambdas(ind1,ind2,ind3)                   !< get gas thermal conductivity
+         gT = gTemp(ind1,ind2,ind3)                      !< get gas temperature
 
          source = getConvHeatSource(Udif=Udif,Vdif=Vdif,Wdif=Wdif,visc=gVisc,charL=this%p(i)%d,rho=gRho&
             ,gEps=gEps,gCp=gCp,gk=gk,gT=gT,pT=this%p(i)%T)
 
+         !< Update source term
          srcTp(ind1,ind2,ind3) = srcTp(ind1,ind2,ind3) - source
 
+         !< Advance particle temperature
          dTdt = source/(this%p(i)%mass*this%p(i)%avgCp)
          this%p(i)%T = this%p(i)%T + dTdt*dt
 

@@ -42,7 +42,7 @@ module dev_lpt_class
 
       ! newly added===========================
       real(WP), dimension(neq) :: composition  !< Mass fractrion of each component
-      
+
       real(WP) :: initMass
       real(WP) :: mass
       real(WP) :: T                        !< Temperature
@@ -134,7 +134,7 @@ module dev_lpt_class
       integer :: compNum
       integer, dimension(:), allocatable :: nongasMask  !< Mask for non-gas phase
       real(WP), dimension(:), allocatable :: densities                 !< Density of each component
-      real(WP), dimension(:), allocatable :: heatCapacities            !< Heat capacity of each component
+      real(WP), dimension(:), allocatable :: heatCapacities            !< non-gas heat capacity of each component
 
       ! reaction solver
       type(reactionSolver) :: reactionSolver
@@ -1936,13 +1936,15 @@ contains
 
          source = getConvHeatSource(Udif=Udif,Vdif=Vdif,Wdif=Wdif,visc=gVisc,charL=this%p(i)%d,rho=gRho&
             ,gEps=gEps,gCp=gCp,gk=gk,gT=gT,pT=this%p(i)%T)
-
-         !< Update source term
-         srcTp(ind1,ind2,ind3) = srcTp(ind1,ind2,ind3) - source
+         print*, "Particle ID: ", this%p(i)%id, "Temperature:",this%p(i)%T, "Source: ", source
+         print*, "Temperature difference: ", this%p(i)%T-gT
 
          !< Advance particle temperature
          dTdt = source/(this%p(i)%mass*this%p(i)%avgCp)
          this%p(i)%T = this%p(i)%T + dTdt*dt
+
+         !< Update source term, unit: [W/m^3]
+         srcTp(ind1,ind2,ind3) = srcTp(ind1,ind2,ind3) - source/this%cfg%vol(ind1,ind2,ind3)
 
       end do convectionHeatTrans
 
@@ -1968,22 +1970,20 @@ contains
 !< get each source term for multi-variable trasnport equation solver
 !< get mass source term for continuity equation
 !< Unit: [kg/m^3/s]
-   subroutine react(this,time,dt,scSRC, massSRC)
+   subroutine react(this,time,dt,scSRC, massSRC, heatSRC, gCp)
       use mathtools, only: Pi
       implicit none
       !< Input arguments
       class(lpt), intent(inout) :: this
       real(WP) :: dt,time
+      real(WP), dimension(:),optional :: gCp    !< species gas phase heat capacities
       !< Output arguments
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout) :: massSRC
       real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_,neq), intent(inout) :: scSRC
+      real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_), intent(inout),optional :: heatSRC
       !< Local variables
       real(WP), dimension(neq) :: oldComp    !< to restore old composition
       integer :: i,j,k, isc, ind1, ind2, ind3
-
-      !< initialize source term
-      scSRC = 0.0_WP
-      massSRC = 0.0_WP
 
       !< react each particle
       reaction: do i=1,this%np_
@@ -1991,12 +1991,21 @@ contains
          oldComp = this%p(i)%composition
          call this%reactionSolver%proceedReaction(time, dt, this%p(i)%T, this%p(i)%composition)
          ! print*, "Particle ID: ", this%p(i)%id, "Temperature:",this%p(i)%T,"Mass:",this%p(i)%mass, "Composition: ", this%p(i)%composition
-         
+
+         ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
          !< get source term for each species
          do isc=1,neq
             if (this%nongasMask(isc).eq.1) cycle
-            ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
-            scSRC(ind1,ind2,ind3,isc) = scSRC(ind1,ind2,ind3,isc) + (this%p(i)%composition(isc)-oldComp(isc))*this%p(i)%mass/dt
+            !< mass source term, in unit of [kg/m^3/s]
+            scSRC(ind1,ind2,ind3,isc) = scSRC(ind1,ind2,ind3,isc) + (this%p(i)%composition(isc)-oldComp(isc))*this%p(i)%initMass/(dt*this%cfg%vol(ind1,ind2,ind3))
+
+            if (present(heatSRC) .and. present(gCp)) then
+               !< heat heat source term due to mass source term flow, in unit of [W/m^3]
+               heatSRC(ind1,ind2,ind3) = heatSRC(ind1,ind2,ind3)&
+               & + ((this%p(i)%composition(isc)-oldComp(isc))*this%p(i)%initMass/(dt*this%cfg%vol(ind1,ind2,ind3)))&  !< mass
+               &*gCp(isc)*this%p(i)%T         !< times heat capacity and temperature
+            end if
+
          end do
       end do reaction
 

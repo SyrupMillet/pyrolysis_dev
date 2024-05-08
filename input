@@ -2,17 +2,20 @@
 Partition :	8 1 1
 
 # Mesh definition
-Lx :	.0256
+Lx :	.0128
 Ly :	.0064
-Lz :	2.19e-4
-nx :	128
-ny :	32
+Lz :	4.19e-4
+nx :	32
+ny :	17
 nz :	1
 
 # Time integration
-Max timestep size :	1e-5
+Max timestep size :	5e-5
 Max cfl number :	1
-Max time : 		10
+Max time : 		2
+
+# Ensight output
+Ensight output period : 10e-3
 
 # Fluid properties
 Dynamic viscosity : 36.59e-6
@@ -22,12 +25,12 @@ Gravity :   -9.81 0 0
 Dynamic diffusivity : 0.002
 
 # Particle parameters
-Particle numbers : 60
+Particle numbers : 30
 Coefficient of restitution : 0.8
 Friction coefficient : 0.1
 Particle density :  960
 Particle diameter : 200e-6
-Collision timescale : 15e-5
+Collision timescale : 75e-5
 
 Particle temperature : 300.0
 
@@ -42,7 +45,7 @@ Species nongas densities : 0.0 960 0.0 0.0 800.0
 Species nongas heatCapacities : 0.0 2300.0 0.0 0.0 2367.0
 Lewis number : 1.0           !< It will be used to calculate multiscalar diffusivity if is set >0
 Species gas phase heat capacities : 2770.0 2600.0 2450.0 1440.0 1700.0
-Species gas phase heat conductivities : 0.05 0.05 0.05 0.08 0.05 
+Species gas phase heat conductivities : 0.05 0.05 0.05 0.05 0.05 
 inital gas phase temperature : 300.0
 
 # Inital Mass compositions
@@ -51,7 +54,7 @@ Particle inital composition : 0.0 1.0 0.0 0.0 0.0
 
 # For inlet flow 
 Inlet composition : 1.0 0.0 0.0 0.0 0.0 
-Inlet temperature : 973.15
+Inlet temperature : 900.0
 Inlet velocity : 0.3
 
 # Pressure solver
@@ -62,5 +65,3 @@ Pressure iteration : 	100
 Implicit tolerance : 	1e-6
 Implicit iteration : 	100
 
-# Ensight output
-Ensight output period : 1e-2

@@ -50,9 +50,10 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: resMSC,srcMSC,mscTmp    !< Residuals, source, temp solution for multiscalar solver
    logical, dimension(:,:,:,:), allocatable :: bqflag                   !< Flag for bquick scheme
    real(WP), dimension(:,:,:), allocatable :: massFracSum                          !< Sum of mass fractions for check
+   real(WP), dimension(:), allocatable :: SCmassOutSum,  dSCmassOutSumdt               !< Sum of mass fractions for check
 
    !> Temperature solver work arrays
-   real(WP), dimension(:,:,:), allocatable :: resTp, srcTp               !< Residuals, source for temperature solver
+   real(WP), dimension(:,:,:), allocatable :: resTp, srcTp               !< Residuals and source for temperature solver
    real(WP), dimension(:,:,:), allocatable :: gTfield, gCpfield, gLambdafield !< Temperature; Averaged Cp and Lambda fields
 
 
@@ -171,6 +172,29 @@ contains
       end do
    end subroutine checkMassFractionSum
 
+   subroutine getFluxOutSum(time,dt)
+      use multivdscalar_class, only: bcond
+      implicit none
+      integer :: i,j,k,isc,n
+      type(bcond), pointer :: mybc
+      real(WP) :: dt,time
+      real(WP) :: area
+
+      area = fs%cfg%dy(1)*fs%cfg%dz(1)
+
+      call msc%get_bcond('outflow',mybc)
+      do n=1,mybc%itr%no_
+         i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+         if (j.le.msc%cfg%jmax_ .and. j.ge.msc%cfg%jmin_ .and. k.le.msc%cfg%kmax_ .and. k.ge.msc%cfg%kmin_) then
+            do isc=1,msc%nscalar
+               SCmassOutSum(isc) = SCmassOutSum(isc) + msc%SC(i,j,k,isc)*fs%rhoU(i,j,k)*area*dt
+            end do
+         end if
+      end do
+
+      ! print*, time,SCmassOutSum
+   end subroutine getFluxOutSum
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -224,8 +248,9 @@ contains
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
          ! Define boundary conditions
-         call fs%add_bcond(name= 'inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='inflow',type=dirichlet      ,locator=left_of_domain ,face='x',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='outflow',type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true. )
+
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign acceleration of gravity
@@ -268,9 +293,9 @@ contains
 
       ! Create a temperature solver
       create_temperature_solver: block
-         use vdscalar_class, only: dirichlet,neumann,upwind,bquick,quick
+         use vdscalar_class, only: dirichlet,neumann,quick,upwind
          ! Create scalar solver
-         tp=vdscalar(cfg=cfg,scheme=quick,name='Temperature')
+         tp=vdscalar(cfg=cfg,scheme=upwind,name='Temperature')
          ! Define boundary conditions
          call tp%add_bcond(name='inflow',type=dirichlet,locator=left_of_domainsc   )
          ! Outflow on the right
@@ -303,6 +328,8 @@ contains
          allocate(mscTmp(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(bqflag(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(massFracSum(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_))
+         allocate(SCmassOutSum(msc%nscalar))
+         allocate(dSCmassOutSumdt(msc%nscalar))
 
          !< Temperature solver
          allocate(resTp   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -317,7 +344,7 @@ contains
       srcConti=0.0_WP
       srcMSC=0.0_WP
       srcTp=0.0_WP
-      
+
 
       ! Initialize our LPT solver
       initialize_lpt: block
@@ -488,10 +515,13 @@ contains
          use lowmach_class, only: bcond
          type(bcond), pointer :: mybc
          integer :: n,i,j,k
-         ! Zero initial field
-         fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
+
          ! Set inflow velocity/momentum
          call param_read('Inlet velocity',inlet_velocity)
+
+         ! Zero initial field
+         fs%U=inlet_velocity; fs%V=0.0_WP; fs%W=0.0_WP
+
          call fs%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -499,8 +529,9 @@ contains
             fs%U(i,j,k)   =inlet_velocity
          end do
          fs%rho=msc%rho
+
          ! Form momentum
-         call fs%rho_multiply
+         call fs%rho_multiply()
          ! Apply all other boundary conditions
          call fs%apply_bcond(time%t,time%dt)
          call fs%interp_vel(Ui,Vi,Wi)
@@ -530,7 +561,7 @@ contains
          call tp%get_bcond('inflow',mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            tp%SC(i,j,k)=inletTemp*dot_product(inletComp,gCp)
+            tp%SC(i,j,k)=(2*inletTemp-tp%SC(i+1,j,k)/dot_product(msc%SC(i+1,j,k,:),gCp))*dot_product(msc%SC(i,j,k,:),gCp)
          end do
 
          call tp%apply_bcond(time%t,time%dt)
@@ -574,6 +605,11 @@ contains
          end do
          ! Add Temperature to output
          call ens_out%add_scalar('Temperature',gTfield)
+         call ens_out%add_scalar('srcTp',srcTp)
+         call ens_out%add_scalar('TCp',tp%SC)
+         call ens_out%add_scalar('T_cap',gCpfield)
+         call ens_out%add_scalar('T_lambda',gLambdafield)
+         call ens_out%add_scalar('Tdiffusivity',tp%diff)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -699,21 +735,28 @@ contains
          wt_lpt%time_in=parallel_time()
          call fs%get_div_stress(resU,resV,resW)
 
-         ! ================================= Particle soolver ==========================
-
+         ! ================================= Particle solver ==========================
          call lp%collide(dt=time%dtmid)
          call lp%advance(dt=time%dtmid,U=fs%U,V=fs%V,W=fs%W,rho=msc%rho,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
-            srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
+             srcU=srcUlp,srcV=srcVlp,srcW=srcWlp)
+
+         !> intial source term array for interphase transport
+         srcMSC = 0.0_WP
+         srcConti = 0.0_WP
+         srcTp = 0.0_WP
 
          !< Update temperature
+         !< The source term from interphase heat transfer is in unit of [W/m^3]
          call lp%updateTemp(U=fs%U,V=fs%V,W=fs%W,visc=fs%visc,rho=rho0,gCps=gCpfield,glambdas=gLambdafield,gTemp=gTfield,dt=time%dt,srcTp=srcTp)
 
          !< Reaction
-         call lp%react(time=time%t, dt=time%dt, scSRC=srcMSC, massSRC=srcConti)
+         !< The MSC and Mass source term are in unit of [kg/m^3/s]
+         !< The heat source term is for phase change, in unit of [W/m^3]
+         call lp%react(time=time%t, dt=time%dt, scSRC=srcMSC, massSRC=srcConti,heatSRC=srcTp, gCp=gCp)
 
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
 
-         ! =============================================================================
+
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -733,7 +776,7 @@ contains
             do isc=1,msc%nscalar
                resMSC(:,:,:,isc)=time%dt*resMSC(:,:,:,isc)&
                &   -2.0_WP*msc%rho*msc%SC(:,:,:,isc)+(msc%rho+msc%rhoold)*msc%SCold(:,:,:,isc)&
-               &   +time%dt*msc%rho*srcMSC(:,:,:,isc)  !< Source term
+               &   +time%dt*srcMSC(:,:,:,isc)  !< Source term
                !< Get temperary solution for bquick
                mscTmp(:,:,:,isc)=2.0_WP*msc%SC(:,:,:,isc)-msc%SCold(:,:,:,isc)+resMSC(:,:,:,isc)/msc%rho
             end do
@@ -758,9 +801,9 @@ contains
             ! re-Assemble explicit residual
             call msc%get_drhoSCdt(resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
             do isc=1,msc%nscalar
-               resMSC(:,:,:,isc)=time%dt*resMSC(:,:,:,isc)&
+               resMSC(:,:,:,isc) = time%dt*resMSC(:,:,:,isc)&
                &   -2.0_WP*msc%rho*msc%SC(:,:,:,isc)+(msc%rho+msc%rhoold)*msc%SCold(:,:,:,isc)&
-               &   +time%dt*msc%rho*srcMSC(:,:,:,isc)  !< Source term
+               &   +time%dt*srcMSC(:,:,:,isc)  !< Source term
             end do
 
             call msc%solve_implicit(time%dt,resMSC,fs%rhoU,fs%rhoV,fs%rhoW)
@@ -779,38 +822,6 @@ contains
             call get_rho()
             call msc%get_max()
             call msc%get_int()
-
-            ! ===================== Temperature Solver =====================
-            ! Get Temperature rho and diffusivity
-            tp%rho=msc%rho
-            call get_tp_diff()
-
-            ! Build mid-time temperature*Cp
-            tp%SC = 0.5_WP*(tp%SC+tp%SCold)
-
-            ! Assemble explicit residual
-            call tp%get_drhoSCdt(resTp,fs%rhoU,fs%rhoV,fs%rhoW)
-            resTp=time%dt*resTp-(2.0_WP*tp%rho*tp%SC-(tp%rho+tp%rhoold)*tp%SCold)+time%dt*tp%rho*srcTP
-
-            ! solve implicit
-            call tp%solve_implicit(time%dt,resTp,fs%rhoU,fs%rhoV,fs%rhoW)
-
-            ! Advance temperature field
-            tp%SC=2.0_WP*tp%SC-tp%SCold+resTp
-
-            ! Apply boundary conditions
-            call tp%apply_bcond(time%t, time%dt)
-            dirichlet_temperature : block
-               use vdscalar_class, only : bcond
-               type(bcond), pointer :: mybc
-               integer :: n,i,j,k
-               call tp%get_bcond('inflow',mybc)
-               do n=1,mybc%itr%no_
-                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  tp%SC(i,j,k)=inletTemp*dot_product(inletComp,gCp)
-               end do
-            end block dirichlet_temperature
-
 
             ! ===================== Velocity Solver =======================
 
@@ -881,7 +892,7 @@ contains
             wt_pres%time_in=parallel_time()
 
             call msc%get_drhodt(dt=time%dt,drhodt=resRHO)
-            resRHO = resRHO + srcConti
+            resRHO = resRHO - srcConti
             call fs%correct_mfr(drhodt=resRHO)
             call fs%get_div(drhodt=resRHO)
 
@@ -900,31 +911,75 @@ contains
             call fs%rho_divide
             wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
 
+            ! ===================== Temperature Solver =====================
+            ! Get Temperature rho and diffusivity
+            tp%rho=msc%rho
+            call get_tp_diff()
+
+            ! Build mid-time temperature*Cp
+            tp%SC = 0.5_WP*(tp%SC+tp%SCold)
+
+            ! Assemble explicit residual
+            call tp%get_drhoSCdt(resTp,fs%rhoU,fs%rhoV,fs%rhoW)
+            resTp = time%dt*resTp-(2.0_WP*tp%rho*tp%SC-(tp%rho+tp%rhoold)*tp%SCold) &
+            &        +time%dt*srcTp     !< Source term, srcTP should be in unit of [W/m^3]
+
+            ! solve implicit
+            call tp%solve_implicit(time%dt,resTp,fs%rhoU,fs%rhoV,fs%rhoW)
+
+            ! Advance temperature field
+            tp%SC=2.0_WP*tp%SC-tp%SCold+resTp
+
+            ! Apply boundary conditions
+            call tp%apply_bcond(time%t, time%dt)
+            dirichlet_temperature : block
+               use vdscalar_class, only : bcond
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k
+               call tp%get_bcond('inflow',mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  tp%SC(i,j,k)=(2*inletTemp-tp%SC(i+1,j,k)/dot_product(msc%SC(i+1,j,k,:),gCp))*dot_product(msc%SC(i,j,k,:),gCp)
+               end do
+            end block dirichlet_temperature
+
+            ! Get temperature, averaged Cp and Lambda fields for output
+            do i=tp%cfg%imino_,tp%cfg%imaxo_
+               do j=tp%cfg%jmino_,tp%cfg%jmaxo_
+                  do k=tp%cfg%kmino_,tp%cfg%kmaxo_
+                     gCpfield(i,j,k)=dot_product(msc%SC(i,j,k,:),gCp)
+                     gTfield(i,j,k)=tp%SC(i,j,k)/gCpfield(i,j,k)
+                     gLambdafield(i,j,k)=dot_product(msc%SC(i,j,k,:),gLambda)
+                  end do
+               end do
+            end do
+
+            ! =======================================================
+
+
             ! Increment sub-iteration counter
+
             time%it=time%it+1
 
          end do
 
          ! ==================== Post Process ==================================
 
-         ! Get temperature, averaged Cp and Lambda fields for output
-         do i=tp%cfg%imino_,tp%cfg%imaxo_
-            do j=tp%cfg%jmino_,tp%cfg%jmaxo_
-               do k=tp%cfg%kmino_,tp%cfg%kmaxo_
-                  gCpfield(i,j,k)=dot_product(msc%SC(i,j,k,:),gCp)
-                  gTfield(i,j,k)=tp%SC(i,j,k)/gCpfield(i,j,k)
-                  gLambdafield(i,j,k)=dot_product(msc%SC(i,j,k,:),gLambda)
-               end do
-            end do
-         end do
+
 
          !< check mass fraction sum
          call checkMassFractionSum()
+
+         if (fs%cfg%imaxo_ .eq. fs%cfg%imaxo) then
+            call getFluxOutSum(time%t,time%dt)
+         end if
+
 
          ! Recompute interpolated velocity and divergence
          wt_vel%time_in=parallel_time()
          call fs%interp_vel(Ui,Vi,Wi)
          call msc%get_drhodt(dt=time%dt,drhodt=resRHO)
+         resRHO = resRHO - srcConti
          call fs%get_div(drhodt=resRHO)
          wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
 

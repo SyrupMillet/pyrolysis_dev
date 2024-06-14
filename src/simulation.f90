@@ -34,7 +34,7 @@ module simulation
    type(event)    :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,lptfile,tfile,mscfile
+   type(monitor) :: mfile,cflfile,lptfile,tfile,mscfile,outfluxfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -50,7 +50,7 @@ module simulation
    real(WP), dimension(:,:,:,:), allocatable :: resMSC,srcMSC,mscTmp    !< Residuals, source, temp solution for multiscalar solver
    logical, dimension(:,:,:,:), allocatable :: bqflag                   !< Flag for bquick scheme
    real(WP), dimension(:,:,:), allocatable :: massFracSum                          !< Sum of mass fractions for check
-   real(WP), dimension(:), allocatable :: SCmassOutSum,  dSCmassOutSumdt               !< Sum of mass fractions for check
+   real(WP), dimension(:), allocatable :: SCmassOutSum             !< Sum of mass fractions for check
 
    !> Temperature solver work arrays
    real(WP), dimension(:,:,:), allocatable :: resTp, srcTp               !< Residuals and source for temperature solver
@@ -179,9 +179,7 @@ contains
       type(bcond), pointer :: mybc
       real(WP) :: dt,time
       real(WP) :: area
-
       area = fs%cfg%dy(1)*fs%cfg%dz(1)
-
       call msc%get_bcond('outflow',mybc)
       do n=1,mybc%itr%no_
          i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
@@ -191,8 +189,6 @@ contains
             end do
          end if
       end do
-
-      ! print*, time,SCmassOutSum
    end subroutine getFluxOutSum
 
    !> Initialization of problem solver
@@ -329,7 +325,6 @@ contains
          allocate(bqflag(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_,msc%nscalar))
          allocate(massFracSum(msc%cfg%imino_:msc%cfg%imaxo_,msc%cfg%jmino_:msc%cfg%jmaxo_,msc%cfg%kmino_:msc%cfg%kmaxo_))
          allocate(SCmassOutSum(msc%nscalar))
-         allocate(dSCmassOutSumdt(msc%nscalar))
 
          !< Temperature solver
          allocate(resTp   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -605,17 +600,13 @@ contains
          end do
          ! Add Temperature to output
          call ens_out%add_scalar('Temperature',gTfield)
-         call ens_out%add_scalar('srcTp',srcTp)
-         call ens_out%add_scalar('TCp',tp%SC)
-         call ens_out%add_scalar('T_cap',gCpfield)
-         call ens_out%add_scalar('T_lambda',gLambdafield)
-         call ens_out%add_scalar('Tdiffusivity',tp%diff)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
 
       ! Create monitor filea
       create_monitor: block
+         integer :: isc
          ! Prepare some info about fields
          real(WP) :: cfl
          call lp%get_cfl(time%dt,cflc=time%cfl,cfl=time%cfl)
@@ -683,13 +674,19 @@ contains
          call mscfile%add_column(time%n,'Timestep number')
          call mscfile%add_column(time%t,'Time')
          call mscfile%add_column(msc%rhomax,'RHOmax')
-         call mscfile%add_column(msc%SCmax(1),'Comp1max')
-         call mscfile%add_column(msc%SCmax(3),'Comp4max')
-         call mscfile%add_column(msc%SCmax(4),'Comp7max')
-         call mscfile%add_column(msc%SCmin(1),'Comp1min')
-         call mscfile%add_column(msc%SCmin(3),'Comp4min')
-         call mscfile%add_column(msc%SCmin(4),'Comp7min')
+         do isc=1,msc%nscalar
+            call mscfile%add_column(msc%SCmax(isc),msc%SCname(isc)//'_max')
+            call mscfile%add_column(msc%SCmin(isc),msc%SCname(isc)//'_min')
+         end do
          call mscfile%write()
+         ! Create out flux accumulate file
+         outfluxfile=monitor(fs%cfg%amRoot,'outflux')
+         call outfluxfile%add_column(time%n,'Timestep number')
+         call outfluxfile%add_column(time%t,'Time')
+         do isc=1,msc%nscalar
+            call outfluxfile%add_column(SCmassOutSum(isc),msc%SCname(isc)//"[kg]")
+         end do
+         call outfluxfile%write()
       end block create_monitor
 
    end subroutine simulation_init
@@ -974,7 +971,6 @@ contains
             call getFluxOutSum(time%t,time%dt)
          end if
 
-
          ! Recompute interpolated velocity and divergence
          wt_vel%time_in=parallel_time()
          call fs%interp_vel(Ui,Vi,Wi)
@@ -1010,6 +1006,7 @@ contains
          call cflfile%write()
          call lptfile%write()
          call mscfile%write()
+         call outfluxfile%write()
 
          ! Monitor timing
          wt_total%time=parallel_time()-wt_total%time_in

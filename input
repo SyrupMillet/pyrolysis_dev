@@ -6,7 +6,7 @@ Lx :	.0128
 Ly :	.0064
 Lz :	4.19e-4
 nx :	32
-ny :	17
+ny :	16
 nz :	1
 
 # Time integration
@@ -55,7 +55,7 @@ Particle inital composition : 0.0 1.0 0.0 0.0 0.0
 # For inlet flow 
 Inlet composition : 1.0 0.0 0.0 0.0 0.0 
 Inlet temperature : 900.0
-Inlet velocity : 0.3
+Inlet velocity : 0.1
 
 # Pressure solver
 Pressure tolerance : 	1e-5

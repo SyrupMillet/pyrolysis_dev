@@ -1936,8 +1936,6 @@ contains
 
          source = getConvHeatSource(Udif=Udif,Vdif=Vdif,Wdif=Wdif,visc=gVisc,charL=this%p(i)%d,rho=gRho&
             ,gEps=gEps,gCp=gCp,gk=gk,gT=gT,pT=this%p(i)%T)
-         print*, "Particle ID: ", this%p(i)%id, "Temperature:",this%p(i)%T, "Source: ", source
-         print*, "Temperature difference: ", this%p(i)%T-gT
 
          !< Advance particle temperature
          dTdt = source/(this%p(i)%mass*this%p(i)%avgCp)
@@ -1990,7 +1988,6 @@ contains
          if (this%p(i)%id.le.0) cycle reaction
          oldComp = this%p(i)%composition
          call this%reactionSolver%proceedReaction(time, dt, this%p(i)%T, this%p(i)%composition)
-         ! print*, "Particle ID: ", this%p(i)%id, "Temperature:",this%p(i)%T,"Mass:",this%p(i)%mass, "Composition: ", this%p(i)%composition
 
          ind1 = this%p(i)%ind(1); ind2 = this%p(i)%ind(2); ind3 = this%p(i)%ind(3)
          !< get source term for each species

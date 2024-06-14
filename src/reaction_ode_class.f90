@@ -20,8 +20,8 @@ module reaction_ode_mod
    integer(c_long), parameter :: neq = 5
 
    ! kinetic parameters
-   real(c_double),dimension(5), parameter :: Ea = [206.2,295.9,206.1,325.2,63.0]
-   real(c_double),dimension(5), parameter :: k0 = [1.32E+13/60,2.56E+19/60,5.40E+13/60,4.99E+18/60,1.86E+01/60]
+   real(c_double),dimension(neq), parameter :: Ea = [206.2,295.9,206.1,325.2,63.0]
+   real(c_double),dimension(neq), parameter :: k0 = [1.32E+13/60,2.56E+19/60,5.40E+13/60,4.99E+18/60,1.86E+01/60]
 
 contains
    ! ----------------------------------------------------------------
@@ -69,7 +69,7 @@ contains
       end if
 
       call c_f_pointer(user_data, T)
-      ! write(*,*) 'T = ', T
+
 
       ! calculate kinetic parameters based on T
       k1 = k0(1) * exp(-Ea(1)*1000.0/(8.3145*T))
@@ -131,7 +131,7 @@ contains
       real(c_double), pointer :: Jmat(:)
 
       call c_f_pointer(user_data, T)
-      ! write(*,*) '[JacFunc]T = ', T
+
       !======= Internals ============
 
       ! get data array from SUNDIALS vector
@@ -274,10 +274,11 @@ contains
       end if
    end function constructor
 
-   subroutine proceedReaction(self,time, dt, T, comp)
+   subroutine proceedReaction(self,time, dt, Temperature, comp)
       implicit none
       class(reactionSolver) :: self
       real(c_double) :: dt,time
+      real(c_double) :: Temperature
       real(c_double), target :: T
       real(c_double), dimension(neq) :: comp
       real(c_double)                 :: tcur(1)      ! current time
@@ -321,7 +322,7 @@ contains
       end if   
 
 
-
+      T = Temperature
       ! Assign Temperature userdata
       ierr = FCVodeSetUserData(self%cvode_mem, c_loc(T))
         if (ierr /= 0) then
